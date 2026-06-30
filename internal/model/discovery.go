@@ -82,6 +82,30 @@ type Repository struct {
 	EnrichedAt           *time.Time
 }
 
+// ReleaseAsset 是 GitHub Release asset 的最小缓存单元。
+type ReleaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url,omitempty"`
+	DownloadCount      int    `json:"download_count"`
+}
+
+// Release 缓存 GitHub stable / prerelease release 元数据。
+//
+// new-releases 首屏只使用非 draft、非 prerelease 的 stable release，但 prerelease 仍保存，
+// 方便后续观察项目活跃度。
+type Release struct {
+	GhRepoID      int64
+	TagName       string
+	Name          string
+	HTMLURL       string
+	PublishedAt   time.Time
+	Draft         bool
+	Prerelease    bool
+	DownloadCount int
+	Assets        []ReleaseAsset
+	IndexedAt     time.Time
+}
+
 // DiscoveryItem 是 Starcat 客户端列表和详情页直接消费的卡片模型。
 type DiscoveryItem struct {
 	RepoID               int64    `json:"repo_id"`

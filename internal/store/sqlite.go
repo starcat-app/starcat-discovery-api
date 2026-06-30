@@ -145,6 +145,44 @@ func (s *SQLiteStore) UpsertRepo(ctx context.Context, repo model.Repository) err
 	return tx.Commit()
 }
 
+// UpsertRelease 写入一个 GitHub Release 及其 asset 摘要。
+func (s *SQLiteStore) UpsertRelease(ctx context.Context, release model.Release) error {
+	if release.GhRepoID <= 0 {
+		return fmt.Errorf("gh_repo_id must be positive")
+	}
+	if release.TagName == "" {
+		return fmt.Errorf("tag_name is required")
+	}
+	if release.PublishedAt.IsZero() {
+		return fmt.Errorf("published_at is required")
+	}
+	if release.IndexedAt.IsZero() {
+		release.IndexedAt = time.Now().UTC()
+	}
+	assetsJSON, err := json.Marshal(release.Assets)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO repo_releases (
+			gh_repo_id, tag_name, name, html_url, published_at, draft, prerelease,
+			download_count, assets_json, indexed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(gh_repo_id, tag_name) DO UPDATE SET
+			name = excluded.name,
+			html_url = excluded.html_url,
+			published_at = excluded.published_at,
+			draft = excluded.draft,
+			prerelease = excluded.prerelease,
+			download_count = excluded.download_count,
+			assets_json = excluded.assets_json,
+			indexed_at = excluded.indexed_at
+	`, release.GhRepoID, release.TagName, nullable(release.Name), nullable(release.HTMLURL),
+		timeString(release.PublishedAt), boolInt(release.Draft), boolInt(release.Prerelease),
+		release.DownloadCount, string(assetsJSON), timeString(release.IndexedAt))
+	return err
+}
+
 // ReplaceCategoryRanking 原子替换某个 category/bucket 的排名。
 func (s *SQLiteStore) ReplaceCategoryRanking(ctx context.Context, category, bucket string, entries []model.RankingEntry) error {
 	tx, err := s.db.BeginTx(ctx, nil)

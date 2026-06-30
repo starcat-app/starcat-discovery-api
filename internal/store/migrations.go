@@ -54,6 +54,26 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_repos_discovery ON repos(discovery_score DESC, gh_repo_id DESC);
 		CREATE INDEX IF NOT EXISTS idx_repos_trending ON repos(trending_score DESC, gh_repo_id DESC);
 
+		CREATE TABLE IF NOT EXISTS repo_releases (
+			gh_repo_id     INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
+			tag_name       TEXT NOT NULL,
+			name           TEXT,
+			html_url       TEXT,
+			published_at   TEXT NOT NULL,
+			draft          INTEGER NOT NULL DEFAULT 0,
+			prerelease     INTEGER NOT NULL DEFAULT 0,
+			download_count INTEGER NOT NULL DEFAULT 0,
+			assets_json    TEXT NOT NULL DEFAULT '[]',
+			indexed_at     TEXT NOT NULL,
+			PRIMARY KEY (gh_repo_id, tag_name)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_repo_releases_repo
+			ON repo_releases(gh_repo_id, published_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_repo_releases_stable
+			ON repo_releases(published_at DESC, download_count DESC)
+			WHERE draft = 0 AND prerelease = 0;
+
 		CREATE TABLE IF NOT EXISTS repo_topic_codes (
 			gh_repo_id INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
 			code       TEXT NOT NULL,

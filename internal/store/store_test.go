@@ -84,6 +84,34 @@ func TestSQLiteStoreCategoryRanking(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreUpsertRelease(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	if err := store.UpsertRepo(context.Background(), model.Repository{
+		GhRepoID:  5,
+		Owner:     "release",
+		Name:      "app",
+		FullName:  "release/app",
+		IndexedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := store.UpsertRelease(context.Background(), model.Release{
+		GhRepoID:      5,
+		TagName:       "v1.0.0",
+		Name:          "First stable release",
+		HTMLURL:       "https://github.com/release/app/releases/tag/v1.0.0",
+		PublishedAt:   now,
+		DownloadCount: 42,
+		Assets: []model.ReleaseAsset{
+			{Name: "app-macos.zip", BrowserDownloadURL: "https://example.com/app.zip", DownloadCount: 42},
+		},
+		IndexedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertRelease() error = %v", err)
+	}
+}
+
 func TestSQLiteStoreLanguages(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC()
