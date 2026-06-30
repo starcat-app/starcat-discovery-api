@@ -183,6 +183,62 @@ func (s *SQLiteStore) UpsertRelease(ctx context.Context, release model.Release) 
 	return err
 }
 
+// RecordDailySnapshot 保存每日指标快照。
+func (s *SQLiteStore) RecordDailySnapshot(ctx context.Context, snapshot model.DailySnapshot) error {
+	if snapshot.Date == "" {
+		snapshot.Date = time.Now().UTC().Format("2006-01-02")
+	}
+	if snapshot.CapturedAt.IsZero() {
+		snapshot.CapturedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO repo_daily_snapshots (
+			date, gh_repo_id, stars, forks, watchers, release_download_count, captured_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(date, gh_repo_id) DO UPDATE SET
+			stars = excluded.stars,
+			forks = excluded.forks,
+			watchers = excluded.watchers,
+			release_download_count = excluded.release_download_count,
+			captured_at = excluded.captured_at
+	`, snapshot.Date, snapshot.GhRepoID, snapshot.Stars, snapshot.Forks, snapshot.Watchers,
+		snapshot.ReleaseDownloadCount, timeString(snapshot.CapturedAt))
+	return err
+}
+
+// RecordFeedExposure 记录全局曝光，用于后续发现流冷却和去重。
+func (s *SQLiteStore) RecordFeedExposure(ctx context.Context, feedKey string, repoIDs []int64) error {
+	if strings.TrimSpace(feedKey) == "" || len(repoIDs) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO feed_exposure(feed_key, gh_repo_id, exposed_at, exposure_count)
+		VALUES (?, ?, ?, 1)
+		ON CONFLICT(feed_key, gh_repo_id) DO UPDATE SET
+			exposed_at = excluded.exposed_at,
+			exposure_count = feed_exposure.exposure_count + 1
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, repoID := range repoIDs {
+		if repoID <= 0 {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, feedKey, repoID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // ReplaceCategoryRanking 原子替换某个 category/bucket 的排名。
 func (s *SQLiteStore) ReplaceCategoryRanking(ctx context.Context, category, bucket string, entries []model.RankingEntry) error {
 	tx, err := s.db.BeginTx(ctx, nil)

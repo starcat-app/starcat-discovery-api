@@ -116,6 +116,31 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_topic_rankings_lookup
 			ON topic_rankings(topic, platform, rank);
 
+		CREATE TABLE IF NOT EXISTS repo_daily_snapshots (
+			date                   TEXT NOT NULL,
+			gh_repo_id             INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
+			stars                  INTEGER NOT NULL DEFAULT 0,
+			forks                  INTEGER NOT NULL DEFAULT 0,
+			watchers               INTEGER NOT NULL DEFAULT 0,
+			release_download_count INTEGER NOT NULL DEFAULT 0,
+			captured_at            TEXT NOT NULL,
+			PRIMARY KEY (date, gh_repo_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_repo_daily_snapshots_repo
+			ON repo_daily_snapshots(gh_repo_id, date DESC);
+
+		CREATE TABLE IF NOT EXISTS feed_exposure (
+			feed_key       TEXT NOT NULL,
+			gh_repo_id     INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
+			exposed_at     TEXT NOT NULL,
+			exposure_count INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY (feed_key, gh_repo_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_feed_exposure_lookup
+			ON feed_exposure(feed_key, exposed_at DESC);
+
 		CREATE TABLE IF NOT EXISTS sync_runs (
 			id             INTEGER PRIMARY KEY AUTOINCREMENT,
 			mode           TEXT NOT NULL,

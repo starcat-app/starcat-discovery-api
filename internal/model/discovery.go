@@ -106,6 +106,17 @@ type Release struct {
 	IndexedAt     time.Time
 }
 
+// DailySnapshot 保存每日关键指标，用于后续计算增长和趋势。
+type DailySnapshot struct {
+	Date                 string
+	GhRepoID             int64
+	Stars                int
+	Forks                int
+	Watchers             int
+	ReleaseDownloadCount int
+	CapturedAt           time.Time
+}
+
 // DiscoveryItem 是 Starcat 客户端列表和详情页直接消费的卡片模型。
 type DiscoveryItem struct {
 	RepoID               int64    `json:"repo_id"`

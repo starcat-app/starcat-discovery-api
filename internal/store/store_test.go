@@ -112,6 +112,34 @@ func TestSQLiteStoreUpsertRelease(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreSnapshotAndExposure(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	if err := store.UpsertRepo(context.Background(), model.Repository{
+		GhRepoID:  6,
+		Owner:     "snapshot",
+		Name:      "app",
+		FullName:  "snapshot/app",
+		IndexedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := store.RecordDailySnapshot(context.Background(), model.DailySnapshot{
+		Date:                 "2026-06-30",
+		GhRepoID:             6,
+		Stars:                10,
+		Forks:                2,
+		Watchers:             10,
+		ReleaseDownloadCount: 5,
+		CapturedAt:           now,
+	}); err != nil {
+		t.Fatalf("RecordDailySnapshot() error = %v", err)
+	}
+	if err := store.RecordFeedExposure(context.Background(), "feed:all", []int64{6}); err != nil {
+		t.Fatalf("RecordFeedExposure() error = %v", err)
+	}
+}
+
 func TestSQLiteStoreLanguages(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC()
