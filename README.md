@@ -10,7 +10,7 @@
 - 统一 envelope 响应
 - 普通 API Key 与 Admin API Key 分离
 - SQLite 持久化，Fly.io volume 保存数据
-- GitHub PAT 池供后续 ingest 使用
+- GitHub PAT 池驱动 Search / repo / release ingest
 - 开源友好的 README、LICENSE、CONTRIBUTING、SECURITY、Dockerfile、Fly.io 配置
 
 ## 快速开始
@@ -54,7 +54,7 @@ GET /api/v1/discovery/platforms
 POST /internal/sync/discovery
 ```
 
-当前骨架已实现 `healthz`、`ping` 与管理同步入口。发现 / 榜单读取接口将在后续闭环接入 SQLite 与 ranking。
+发现 / 热门 / 新发布接口读取 SQLite 预计算结果；管理同步入口触发 GitHub ingest 与榜单重建。趋势接口仅作为新版趋势候选保留，Starcat 客户端当前仍使用既有 `starcat-trending-api`。
 
 ## 部署
 
