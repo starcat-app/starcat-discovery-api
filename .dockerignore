@@ -1,0 +1,11 @@
+.git
+.github
+.env
+bin
+coverage.out
+coverage.html
+*.log
+*.pid
+*.db
+*.db-shm
+*.db-wal

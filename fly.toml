@@ -1,0 +1,44 @@
+app = 'starcat-discovery-api'
+primary_region = 'nrt'
+
+[build]
+
+[env]
+  GOGC = '100'
+  GOMAXPROCS = '1'
+  PORT = '5006'
+  STORE_FILE = '/data/discovery.db'
+
+[processes]
+  app = './server'
+
+[[mounts]]
+  source = 'starcat_discovery_data'
+  destination = '/data'
+
+[http_service]
+  internal_port = 5006
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 25
+    soft_limit = 20
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512
