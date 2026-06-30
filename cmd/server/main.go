@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -14,8 +15,12 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/dong4j/starcat-discovery-api/internal/config"
+	"github.com/dong4j/starcat-discovery-api/internal/github"
 	"github.com/dong4j/starcat-discovery-api/internal/handler"
+	"github.com/dong4j/starcat-discovery-api/internal/ingest"
 	"github.com/dong4j/starcat-discovery-api/internal/middleware"
+	"github.com/dong4j/starcat-discovery-api/internal/store"
+	"github.com/dong4j/starcat-discovery-api/internal/tokenpool"
 	"github.com/dong4j/starcat-discovery-api/internal/version"
 )
 
@@ -34,10 +39,28 @@ func main() {
 	apiAuth := middleware.NewBearerAuth("api", cfg.APIKeys)
 	adminAuth := middleware.NewBearerAuth("admin", cfg.AdminAPIKeys)
 
+	sqliteStore, err := store.NewSQLiteStore(context.Background(), cfg.StoreFile)
+	if err != nil {
+		log.Fatalf("Failed to initialize SQLite: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	pool := tokenpool.New(cfg.GitHubTokens)
+	githubClient := github.NewClient(pool, cfg.RateLimitFloor)
+	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
+	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
 	mux.Handle("GET /api/v1/ping", apiAuth.Wrap(handler.HandlePingV1(version.Service)))
-	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(cfg.StoreFile)))
+	mux.Handle("GET /api/v1/discovery/feed", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleFeed)))
+	mux.Handle("GET /api/v1/discovery/categories/most-popular", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleMostPopular)))
+	mux.Handle("GET /api/v1/discovery/categories/new-releases", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleNewReleases)))
+	mux.Handle("GET /api/v1/discovery/categories/trending", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
+	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
+	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
+	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
+	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService)))
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -50,6 +73,13 @@ func main() {
 	log.Printf("starcat-discovery-api %s starting on port %s", version.Version, cfg.Port)
 	log.Printf("Endpoints:")
 	log.Printf("  GET  /api/v1/ping              - Connectivity probe for Starcat client (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/feed    - Discovery feed (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/categories/most-popular - Popular ranking (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/categories/new-releases - New releases ranking (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/categories/trending     - New trending candidate (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/languages - Discovery languages metadata (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/topics    - Discovery topic metadata (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/platforms - Discovery platform metadata (api auth required)")
 	log.Printf("  POST /internal/sync/discovery  - Manual discovery sync (admin auth required)")
 	log.Printf("  GET  /healthz                  - Health check (public)")
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, mux))
