@@ -146,8 +146,8 @@ type DiscoveryItem struct {
 	OwnerAvatar          string   `json:"owner_avatar,omitempty"`
 	DefaultBranch        string   `json:"default_branch,omitempty"`
 	LicenseSpdx          string   `json:"license_spdx,omitempty"`
-	Topics               []string `json:"topics,omitempty"`
-	Platforms            []string `json:"platforms,omitempty"`
+	Topics               []string `json:"topics"`
+	Platforms            []string `json:"platforms"`
 	PushedAt             string   `json:"pushed_at,omitempty"`
 	UpdatedAt            string   `json:"updated_at,omitempty"`
 	CreatedAt            string   `json:"created_at,omitempty"`
@@ -159,8 +159,8 @@ type DiscoveryItem struct {
 	ReleaseDownloadCount int      `json:"release_download_count"`
 	Rank                 int      `json:"rank,omitempty"`
 	Score                float64  `json:"score,omitempty"`
-	Reasons              []string `json:"reasons,omitempty"`
-	Signals              []Signal `json:"signals,omitempty"`
+	Reasons              []string `json:"reasons"`
+	Signals              []Signal `json:"signals"`
 }
 
 // Signal 是列表和详情中用于解释推荐理由的结构化信号。

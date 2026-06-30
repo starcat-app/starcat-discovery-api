@@ -417,7 +417,7 @@ func (s *SQLiteStore) ListLanguages(ctx context.Context) ([]model.LanguageStat, 
 		return nil, err
 	}
 	defer rows.Close()
-	var result []model.LanguageStat
+	result := make([]model.LanguageStat, 0)
 	for rows.Next() {
 		var item model.LanguageStat
 		if err := rows.Scan(&item.Key, &item.Count); err != nil {
@@ -490,7 +490,7 @@ func buildFilterWhere(filters QueryFilters) (string, []interface{}) {
 }
 
 func scanItems(rows *sql.Rows) ([]model.DiscoveryItem, error) {
-	var items []model.DiscoveryItem
+	items := make([]model.DiscoveryItem, 0)
 	for rows.Next() {
 		item, err := scanItem(rows)
 		if err != nil {
@@ -539,7 +539,23 @@ func scanItem(rows *sql.Rows) (model.DiscoveryItem, error) {
 	_ = json.Unmarshal([]byte(platformsJSON), &item.Platforms)
 	item.Signals = buildSignals(item)
 	item.Reasons = buildReasons(item)
+	normalizeDiscoveryItemSlices(&item)
 	return item, nil
+}
+
+func normalizeDiscoveryItemSlices(item *model.DiscoveryItem) {
+	if item.Topics == nil {
+		item.Topics = []string{}
+	}
+	if item.Platforms == nil {
+		item.Platforms = []string{}
+	}
+	if item.Reasons == nil {
+		item.Reasons = []string{}
+	}
+	if item.Signals == nil {
+		item.Signals = []model.Signal{}
+	}
 }
 
 func buildSignals(item model.DiscoveryItem) []model.Signal {
@@ -592,6 +608,9 @@ func normalizePage(page, limit int) (int, int) {
 }
 
 func makePage[T any](items []T, total, page, limit int) model.Page[T] {
+	if items == nil {
+		items = make([]T, 0)
+	}
 	var next *int
 	if page*limit < total {
 		value := page + 1
