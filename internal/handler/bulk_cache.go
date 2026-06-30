@@ -19,6 +19,7 @@ import (
 type BulkCache struct {
 	mu    sync.RWMutex
 	entry *bulkCacheEntry
+	ttl   time.Duration
 }
 
 type bulkCacheEntry struct {
@@ -29,11 +30,17 @@ type bulkCacheEntry struct {
 	builtAt      time.Time
 }
 
-const bulkCacheTTL = 6 * time.Hour
+const defaultBulkCacheTTL = 15 * time.Minute
 
 // NewBulkCache 创建空 bulk cache。
-func NewBulkCache() *BulkCache {
-	return &BulkCache{}
+//
+// ttl 来自 CACHE_TTL_SECONDS。这里不再硬编码 6 小时，是为了让运维配置和实际行为一致；
+// 非法值退回 15 分钟，避免缓存永久失效或意外长期持有旧 catalog。
+func NewBulkCache(ttl time.Duration) *BulkCache {
+	if ttl <= 0 {
+		ttl = defaultBulkCacheTTL
+	}
+	return &BulkCache{ttl: ttl}
 }
 
 // Get 返回未过期 entry。
@@ -43,7 +50,7 @@ func (c *BulkCache) Get() (*bulkCacheEntry, bool) {
 	if c.entry == nil {
 		return nil, false
 	}
-	if time.Since(c.entry.builtAt) > bulkCacheTTL {
+	if time.Since(c.entry.builtAt) > c.ttl {
 		return nil, false
 	}
 	return c.entry, true

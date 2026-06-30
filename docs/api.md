@@ -79,9 +79,9 @@
 | `release_desc` / `release_asc` | 最新 Release 近到远 / 远到近 |
 | `name_asc` / `name_desc` | 仓库名 A-Z / Z-A |
 
-### `GET /api/v1/discovery/categories/trending`
+### `GET /internal/discovery/trending-candidates`
 
-新版趋势候选接口。首期用于后端数据质量对比，不替换现有 `starcat-trending-api`。
+新版趋势候选诊断接口。该接口需要 Admin API Key，仅用于后端数据质量对比，不替换现有 `starcat-trending-api`，也不进入 Starcat 正式客户端链路。
 
 ### `GET /api/v1/discovery/summary`
 

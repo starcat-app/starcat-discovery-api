@@ -35,7 +35,7 @@ go run ./cmd/server/
 | `SYNC_ENABLED` | 否 | `true` | 是否启动定时同步 |
 | `SYNC_CRON` | 否 | `17 */3 * * *` | 轻同步 cron |
 | `FULL_SYNC_CRON` | 否 | `23 2 * * *` | 全量同步 cron |
-| `CACHE_TTL_SECONDS` | 否 | `900` | 读取接口缓存 TTL |
+| `CACHE_TTL_SECONDS` | 否 | `900` | `/discovery/bulk` 进程内缓存 TTL |
 
 ## API
 
@@ -47,16 +47,16 @@ GET /api/v1/ping
 GET /api/v1/discovery/feed
 GET /api/v1/discovery/categories/most-popular
 GET /api/v1/discovery/categories/new-releases
-GET /api/v1/discovery/categories/trending
 GET /api/v1/discovery/summary
 GET /api/v1/discovery/bulk
 GET /api/v1/discovery/languages
 GET /api/v1/discovery/topics
 GET /api/v1/discovery/platforms
+GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
 ```
 
-发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势接口仅作为新版趋势候选诊断保留，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
+发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势候选只保留在 `/internal/discovery/trending-candidates`，需要 Admin API Key，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
 
 ## 部署
 

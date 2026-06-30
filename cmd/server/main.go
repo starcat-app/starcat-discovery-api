@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -50,7 +51,7 @@ func main() {
 	githubClient := github.NewClient(pool, cfg.RateLimitFloor)
 	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
 	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
-	bulkCache := handler.NewBulkCache()
+	bulkCache := handler.NewBulkCache(time.Duration(cfg.CacheTTLSeconds) * time.Second)
 	if cfg.SyncEnabled {
 		sch := scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache)
 		sch.Start()
@@ -63,12 +64,12 @@ func main() {
 	mux.Handle("GET /api/v1/discovery/feed", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleFeed)))
 	mux.Handle("GET /api/v1/discovery/categories/most-popular", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleMostPopular)))
 	mux.Handle("GET /api/v1/discovery/categories/new-releases", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleNewReleases)))
-	mux.Handle("GET /api/v1/discovery/categories/trending", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
 	mux.Handle("GET /api/v1/discovery/summary", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleSummary)))
 	mux.Handle("GET /api/v1/discovery/bulk", apiAuth.Wrap(discoveryHandler.HandleBulk(bulkCache)))
 	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
 	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
 	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
+	mux.Handle("GET /internal/discovery/trending-candidates", adminAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
 	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService, bulkCache)))
 
 	go func() {
@@ -85,12 +86,12 @@ func main() {
 	log.Printf("  GET  /api/v1/discovery/feed    - Discovery feed (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/categories/most-popular - Popular ranking (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/categories/new-releases - New releases ranking (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/categories/trending     - New trending candidate (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/summary   - Sidebar totals and facet counts (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/bulk      - Full local-first catalog snapshot (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/languages - Discovery languages metadata (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/topics    - Discovery topic metadata (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/platforms - Discovery platform metadata (api auth required)")
+	log.Printf("  GET  /internal/discovery/trending-candidates - New trending candidate diagnostics (admin auth required)")
 	log.Printf("  POST /internal/sync/discovery  - Manual discovery sync (admin auth required)")
 	log.Printf("  GET  /healthz                  - Health check (public)")
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, mux))

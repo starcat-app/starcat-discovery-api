@@ -10,7 +10,7 @@
 | `SYNC_ENABLED` | 否 | 是否启动定时同步 |
 | `SYNC_CRON` | 否 | 轻同步 cron |
 | `FULL_SYNC_CRON` | 否 | 全量同步 cron |
-| `CACHE_TTL_SECONDS` | 否 | 读取接口缓存 TTL |
+| `CACHE_TTL_SECONDS` | 否 | `/discovery/bulk` 进程内缓存 TTL |
 | `MAX_SEARCH_CALLS_PER_MINUTE` | 否 | GitHub Search API 保护阈值 |
 | `RATE_LIMIT_FLOOR` | 否 | token 剩余额度低于该值时停止非必要请求 |
 | `FEED_TARGET_SIZE` | 否 | 每个平台每日 feed 候选规模 |

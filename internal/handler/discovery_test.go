@@ -175,7 +175,7 @@ func TestDiscoveryHandlerBulk(t *testing.T) {
 	}
 
 	handler := NewDiscoveryHandler(sqliteStore)
-	cache := NewBulkCache()
+	cache := NewBulkCache(15 * time.Minute)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/bulk", nil)
 	rec := httptest.NewRecorder()
 	handler.HandleBulk(cache)(rec, req)
