@@ -82,6 +82,13 @@ func TestSQLiteStoreCategoryRanking(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].Rank != 1 {
 		t.Fatalf("unexpected ranking page: %+v", page)
 	}
+	entries, err := store.TopRankingEntries(context.Background(), "popularity_score", QueryFilters{Language: "C++"}, 10)
+	if err != nil {
+		t.Fatalf("TopRankingEntries() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].RepoID != 2 {
+		t.Fatalf("unexpected top ranking entries: %+v", entries)
+	}
 }
 
 func TestSQLiteStoreUpsertRelease(t *testing.T) {

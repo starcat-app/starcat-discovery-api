@@ -117,6 +117,18 @@ type DailySnapshot struct {
 	CapturedAt           time.Time
 }
 
+// SyncResult 是 admin sync 返回给运维端的结果摘要。
+type SyncResult struct {
+	RunID         int64  `json:"run_id"`
+	Mode          string `json:"mode"`
+	Status        string `json:"status"`
+	ReposSeen     int    `json:"repos_seen"`
+	ReposUpserted int    `json:"repos_upserted"`
+	StartedAt     string `json:"started_at"`
+	FinishedAt    string `json:"finished_at,omitempty"`
+	ErrorMessage  string `json:"error_message,omitempty"`
+}
+
 // DiscoveryItem 是 Starcat 客户端列表和详情页直接消费的卡片模型。
 type DiscoveryItem struct {
 	RepoID               int64    `json:"repo_id"`

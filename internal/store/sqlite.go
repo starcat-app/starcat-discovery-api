@@ -263,6 +263,93 @@ func (s *SQLiteStore) ReplaceCategoryRanking(ctx context.Context, category, buck
 	return tx.Commit()
 }
 
+// ReplaceTopicRanking 原子替换某个 topic/platform 的发现排名。
+func (s *SQLiteStore) ReplaceTopicRanking(ctx context.Context, topic, platform string, entries []model.RankingEntry) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM topic_rankings WHERE topic = ? AND platform = ?`, topic, platform); err != nil {
+		return err
+	}
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO topic_rankings(topic, platform, gh_repo_id, rank, score, generated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, entry := range entries {
+		if _, err := stmt.ExecContext(ctx, topic, platform, entry.RepoID, entry.Rank, entry.Score, generatedAt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// TopRankingEntries 返回指定 score 和过滤条件下的前 N 个 repo，用于 ranking job 写表。
+func (s *SQLiteStore) TopRankingEntries(ctx context.Context, scoreColumn string, filters QueryFilters, limit int) ([]model.RankingEntry, error) {
+	if !allowedScoreColumn(scoreColumn) {
+		return nil, fmt.Errorf("unsupported score column %s", scoreColumn)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	where, args := buildFilterWhere(filters)
+	query := "SELECT r.gh_repo_id, r." + scoreColumn + " FROM repos r" + where +
+		" ORDER BY r." + scoreColumn + " DESC, r.stars DESC, r.gh_repo_id DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []model.RankingEntry
+	rank := 1
+	for rows.Next() {
+		var entry model.RankingEntry
+		if err := rows.Scan(&entry.RepoID, &entry.Score); err != nil {
+			return nil, err
+		}
+		entry.Rank = rank
+		rank++
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+// StartSyncRun 记录同步任务开始。
+func (s *SQLiteStore) StartSyncRun(ctx context.Context, mode string) (int64, time.Time, error) {
+	startedAt := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO sync_runs(mode, status, started_at)
+		VALUES (?, 'running', ?)
+	`, mode, timeString(startedAt))
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return id, startedAt, nil
+}
+
+// FinishSyncRun 记录同步任务结束。
+func (s *SQLiteStore) FinishSyncRun(ctx context.Context, runID int64, status string, reposSeen, reposUpserted int, errorMessage string) (time.Time, error) {
+	finishedAt := time.Now().UTC()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sync_runs SET
+			status = ?,
+			finished_at = ?,
+			repos_seen = ?,
+			repos_upserted = ?,
+			error_message = ?
+		WHERE id = ?
+	`, status, timeString(finishedAt), reposSeen, reposUpserted, nullable(errorMessage), runID)
+	return finishedAt, err
+}
+
 // ListCategoryRanking 读取预计算排名表。
 func (s *SQLiteStore) ListCategoryRanking(ctx context.Context, category, bucket string, page, limit int) (model.Page[model.DiscoveryItem], error) {
 	page, limit = normalizePage(page, limit)
