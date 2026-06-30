@@ -19,6 +19,7 @@ import (
 	"github.com/dong4j/starcat-discovery-api/internal/handler"
 	"github.com/dong4j/starcat-discovery-api/internal/ingest"
 	"github.com/dong4j/starcat-discovery-api/internal/middleware"
+	"github.com/dong4j/starcat-discovery-api/internal/scheduler"
 	"github.com/dong4j/starcat-discovery-api/internal/store"
 	"github.com/dong4j/starcat-discovery-api/internal/tokenpool"
 	"github.com/dong4j/starcat-discovery-api/internal/version"
@@ -49,6 +50,11 @@ func main() {
 	githubClient := github.NewClient(pool, cfg.RateLimitFloor)
 	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
 	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
+	if cfg.SyncEnabled {
+		sch := scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron)
+		sch.Start()
+		defer sch.Stop()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
