@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dong4j/starcat-discovery-api/internal/github"
+	"github.com/dong4j/starcat-discovery-api/internal/model"
 	"github.com/dong4j/starcat-discovery-api/internal/store"
 )
 
@@ -35,6 +36,55 @@ func TestServiceSync(t *testing.T) {
 	}
 	if len(page.Items) == 0 {
 		t.Fatalf("expected ranking items")
+	}
+}
+
+func TestServiceSyncPrunesStaleReposOnlyForFullMode(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name       string
+		mode       string
+		wantPruned int
+		wantTotal  int
+	}{
+		{name: "light sync keeps stale repos", mode: "scheduled-light", wantPruned: 0, wantTotal: 2},
+		{name: "full sync prunes stale repos", mode: "scheduled-full", wantPruned: 1, wantTotal: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "discovery.db"))
+			if err != nil {
+				t.Fatalf("NewSQLiteStore() error = %v", err)
+			}
+			t.Cleanup(func() { _ = sqliteStore.Close() })
+			if err := sqliteStore.UpsertRepo(ctx, model.Repository{
+				GhRepoID:       999,
+				Owner:          "stale",
+				Name:           "old",
+				FullName:       "stale/old",
+				DiscoveryScore: 0.1,
+				IndexedAt:      now,
+			}); err != nil {
+				t.Fatalf("UpsertRepo(stale) error = %v", err)
+			}
+
+			service := NewService(sqliteStore, &fakeGitHubClient{}, 10)
+			service.now = func() time.Time { return now }
+			result, err := service.Sync(ctx, testCase.mode)
+			if err != nil {
+				t.Fatalf("Sync() error = %v", err)
+			}
+			if result.ReposPruned != testCase.wantPruned {
+				t.Fatalf("ReposPruned = %d, want %d; result=%+v", result.ReposPruned, testCase.wantPruned, result)
+			}
+			page, err := sqliteStore.ListScoredRepos(ctx, "discovery_score", store.QueryFilters{}, 1, 20)
+			if err != nil {
+				t.Fatalf("ListScoredRepos() error = %v", err)
+			}
+			if page.Total != testCase.wantTotal {
+				t.Fatalf("total repos = %d, want %d; items=%+v", page.Total, testCase.wantTotal, page.Items)
+			}
+		})
 	}
 }
 

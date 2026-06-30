@@ -171,6 +171,56 @@ func TestSQLiteStoreSnapshotAndExposure(t *testing.T) {
 	}
 }
 
+func TestSQLiteStorePruneReposNotInCascadesRelatedRows(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	for _, repo := range []model.Repository{
+		{GhRepoID: 70, Owner: "keep", Name: "app", FullName: "keep/app", DiscoveryScore: 0.9, IndexedAt: now},
+		{GhRepoID: 71, Owner: "stale", Name: "app", FullName: "stale/app", DiscoveryScore: 0.8, IndexedAt: now},
+	} {
+		if err := store.UpsertRepo(context.Background(), repo); err != nil {
+			t.Fatalf("UpsertRepo() error = %v", err)
+		}
+	}
+	if err := store.UpsertRelease(context.Background(), model.Release{
+		GhRepoID:    71,
+		TagName:     "v0.1.0",
+		HTMLURL:     "https://github.com/stale/app/releases/tag/v0.1.0",
+		PublishedAt: now,
+		IndexedAt:   now,
+	}); err != nil {
+		t.Fatalf("UpsertRelease(stale) error = %v", err)
+	}
+	if err := store.ReplaceCategoryRanking(context.Background(), "most-popular", model.AllBucket, []model.RankingEntry{
+		{RepoID: 70, Rank: 1, Score: 0.9},
+		{RepoID: 71, Rank: 2, Score: 0.8},
+	}); err != nil {
+		t.Fatalf("ReplaceCategoryRanking() error = %v", err)
+	}
+
+	pruned, err := store.PruneReposNotIn(context.Background(), []int64{70})
+	if err != nil {
+		t.Fatalf("PruneReposNotIn() error = %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned = %d, want 1", pruned)
+	}
+	page, err := store.ListScoredRepos(context.Background(), "discovery_score", QueryFilters{}, 1, 20)
+	if err != nil {
+		t.Fatalf("ListScoredRepos() error = %v", err)
+	}
+	if page.Total != 1 || page.Items[0].RepoID != 70 {
+		t.Fatalf("unexpected repos after prune: %+v", page.Items)
+	}
+	ranking, err := store.ListCategoryRanking(context.Background(), "most-popular", model.AllBucket, 1, 20)
+	if err != nil {
+		t.Fatalf("ListCategoryRanking() error = %v", err)
+	}
+	if ranking.Total != 1 || ranking.Items[0].RepoID != 70 {
+		t.Fatalf("expected ranking cascade delete, got %+v", ranking.Items)
+	}
+}
+
 func TestSQLiteStoreLanguages(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC()

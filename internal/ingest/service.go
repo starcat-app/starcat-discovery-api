@@ -35,6 +35,7 @@ type Store interface {
 	ReplaceTopicRanking(ctx context.Context, topic, platform string, entries []model.RankingEntry) error
 	TopRankingEntries(ctx context.Context, scoreColumn string, filters store.QueryFilters, limit int) ([]model.RankingEntry, error)
 	ListLanguages(ctx context.Context) ([]model.LanguageStat, error)
+	PruneReposNotIn(ctx context.Context, keepIDs []int64) (int, error)
 	StartSyncRun(ctx context.Context, mode string) (int64, time.Time, error)
 	FinishSyncRun(ctx context.Context, runID int64, status string, reposSeen, reposUpserted int, errorMessage string) (time.Time, error)
 }
@@ -95,8 +96,19 @@ func (s *Service) Sync(ctx context.Context, mode string) (model.SyncResult, erro
 		return result, syncErr
 	}
 
-	if err := s.syncSeeds(ctx, &result); err != nil {
+	candidateIDs, err := s.syncSeeds(ctx, &result)
+	if err != nil {
 		return finish("failed", err)
+	}
+	if isFullSyncMode(mode) {
+		if len(candidateIDs) == 0 {
+			return finish("failed", fmt.Errorf("full sync produced no candidates; skip prune"))
+		}
+		pruned, err := s.store.PruneReposNotIn(ctx, candidateIDs)
+		if err != nil {
+			return finish("failed", err)
+		}
+		result.ReposPruned = pruned
 	}
 	if err := s.refreshRankings(ctx); err != nil {
 		return finish("failed", err)
@@ -104,16 +116,21 @@ func (s *Service) Sync(ctx context.Context, mode string) (model.SyncResult, erro
 	return finish("success", nil)
 }
 
-func (s *Service) syncSeeds(ctx context.Context, result *model.SyncResult) error {
+func (s *Service) syncSeeds(ctx context.Context, result *model.SyncResult) ([]int64, error) {
 	seen := map[int64]bool{}
+	candidateIDs := make([]int64, 0)
 	for _, seed := range defaultSeeds() {
 		repos, err := s.github.SearchRepositories(ctx, seed.Query, s.searchLimit)
 		if err != nil {
-			return fmt.Errorf("search seed %s: %w", seed.Query, err)
+			return nil, fmt.Errorf("search seed %s: %w", seed.Query, err)
 		}
 		for _, candidate := range repos {
 			if candidate.ID > 0 && seen[candidate.ID] {
 				continue
+			}
+			if candidate.ID > 0 {
+				seen[candidate.ID] = true
+				candidateIDs = append(candidateIDs, candidate.ID)
 			}
 			result.ReposSeen++
 			repo, err := s.github.GetRepository(ctx, candidate.FullName)
@@ -130,11 +147,15 @@ func (s *Service) syncSeeds(ctx context.Context, result *model.SyncResult) error
 				log.Printf("[ingest] upsert repo %s failed: %v", repo.FullName, err)
 				continue
 			}
-			seen[repo.ID] = true
 			result.ReposUpserted++
 		}
 	}
-	return nil
+	return candidateIDs, nil
+}
+
+func isFullSyncMode(mode string) bool {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	return mode == "full" || strings.HasSuffix(mode, "-full") || strings.Contains(mode, "full-sync")
 }
 
 func (s *Service) upsertRepo(ctx context.Context, repo github.Repository, releases []github.Release, seedTopic string) error {

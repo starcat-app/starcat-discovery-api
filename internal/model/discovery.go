@@ -124,6 +124,7 @@ type SyncResult struct {
 	Status        string `json:"status"`
 	ReposSeen     int    `json:"repos_seen"`
 	ReposUpserted int    `json:"repos_upserted"`
+	ReposPruned   int    `json:"repos_pruned,omitempty"`
 	StartedAt     string `json:"started_at"`
 	FinishedAt    string `json:"finished_at,omitempty"`
 	ErrorMessage  string `json:"error_message,omitempty"`

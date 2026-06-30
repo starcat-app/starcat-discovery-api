@@ -209,6 +209,37 @@ func (s *SQLiteStore) RecordDailySnapshot(ctx context.Context, snapshot model.Da
 	return err
 }
 
+// PruneReposNotIn 删除本轮全量同步不再命中的仓库。
+//
+// 只给 full sync 使用。空 keep list 直接拒绝，避免 GitHub 短暂异常或种子配置错误把
+// catalog 清空；关联 release、ranking、snapshot、exposure 依赖外键级联删除。
+func (s *SQLiteStore) PruneReposNotIn(ctx context.Context, keepIDs []int64) (int, error) {
+	if len(keepIDs) == 0 {
+		return 0, fmt.Errorf("keep ids must not be empty")
+	}
+	placeholders := make([]string, 0, len(keepIDs))
+	args := make([]interface{}, 0, len(keepIDs))
+	for _, id := range keepIDs {
+		if id <= 0 {
+			continue
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	if len(args) == 0 {
+		return 0, fmt.Errorf("keep ids must contain positive repo ids")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM repos WHERE gh_repo_id NOT IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(rowsAffected), nil
+}
+
 // RecordFeedExposure 记录全局曝光，用于后续发现流冷却和去重。
 func (s *SQLiteStore) RecordFeedExposure(ctx context.Context, feedKey string, repoIDs []int64) error {
 	if strings.TrimSpace(feedKey) == "" || len(repoIDs) == 0 {
@@ -361,7 +392,12 @@ func (s *SQLiteStore) FinishSyncRun(ctx context.Context, runID int64, status str
 func (s *SQLiteStore) ListCategoryRanking(ctx context.Context, category, bucket string, page, limit int) (model.Page[model.DiscoveryItem], error) {
 	page, limit = normalizePage(page, limit)
 	offset := (page - 1) * limit
-	total, err := s.count(ctx, `SELECT COUNT(*) FROM category_rankings WHERE category = ? AND bucket = ?`, category, bucket)
+	total, err := s.count(ctx, `
+		SELECT COUNT(*)
+		FROM category_rankings cr
+		JOIN repos r ON r.gh_repo_id = cr.gh_repo_id
+		WHERE cr.category = ? AND cr.bucket = ?
+	`, category, bucket)
 	if err != nil {
 		return model.Page[model.DiscoveryItem]{}, err
 	}

@@ -53,6 +53,11 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_repos_release ON repos(latest_release_at DESC, release_score DESC, gh_repo_id DESC);
 		CREATE INDEX IF NOT EXISTS idx_repos_discovery ON repos(discovery_score DESC, gh_repo_id DESC);
 		CREATE INDEX IF NOT EXISTS idx_repos_trending ON repos(trending_score DESC, gh_repo_id DESC);
+		CREATE INDEX IF NOT EXISTS idx_repos_search ON repos(search_score DESC, gh_repo_id DESC);
+		CREATE INDEX IF NOT EXISTS idx_repos_stars ON repos(stars DESC, gh_repo_id DESC);
+		CREATE INDEX IF NOT EXISTS idx_repos_updated ON repos(updated_at DESC, pushed_at DESC, created_at DESC, gh_repo_id DESC);
+		CREATE INDEX IF NOT EXISTS idx_repos_created ON repos(created_at DESC, gh_repo_id DESC);
+		CREATE INDEX IF NOT EXISTS idx_repos_full_name_lower ON repos(lower(full_name), gh_repo_id DESC);
 
 		CREATE TABLE IF NOT EXISTS repo_releases (
 			gh_repo_id     INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
@@ -102,6 +107,8 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 
 		CREATE INDEX IF NOT EXISTS idx_category_rankings_lookup
 			ON category_rankings(category, bucket, rank);
+		CREATE INDEX IF NOT EXISTS idx_category_rankings_bucket_repo
+			ON category_rankings(bucket, gh_repo_id);
 
 		CREATE TABLE IF NOT EXISTS topic_rankings (
 			topic        TEXT NOT NULL,
