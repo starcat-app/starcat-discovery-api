@@ -70,6 +70,20 @@ func TestSQLiteStoreCategoryRanking(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertRepo() error = %v", err)
 	}
+	if err := store.UpsertRepo(context.Background(), model.Repository{
+		GhRepoID:        22,
+		Owner:           "toy",
+		Name:            "small",
+		FullName:        "toy/small",
+		Language:        "C++",
+		Stars:           20,
+		Topics:          []string{"tools"},
+		Platforms:       []string{"linux"},
+		PopularityScore: 0.2,
+		IndexedAt:       now,
+	}); err != nil {
+		t.Fatalf("UpsertRepo(small) error = %v", err)
+	}
 	if err := store.ReplaceCategoryRanking(context.Background(), "most-popular", "language:C++", []model.RankingEntry{
 		{RepoID: 2, Rank: 1, Score: 0.99},
 	}); err != nil {
@@ -86,8 +100,18 @@ func TestSQLiteStoreCategoryRanking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TopRankingEntries() error = %v", err)
 	}
-	if len(entries) != 1 || entries[0].RepoID != 2 {
+	if len(entries) != 2 || entries[0].RepoID != 2 || entries[1].RepoID != 22 {
 		t.Fatalf("unexpected top ranking entries: %+v", entries)
+	}
+	qualified, err := store.TopRankingEntries(context.Background(), "popularity_score", QueryFilters{
+		Language: "C++",
+		Category: "most-popular",
+	}, 10)
+	if err != nil {
+		t.Fatalf("TopRankingEntries(popular) error = %v", err)
+	}
+	if len(qualified) != 1 || qualified[0].RepoID != 2 {
+		t.Fatalf("popular eligibility should exclude small repos: %+v", qualified)
 	}
 }
 
@@ -170,6 +194,159 @@ func TestSQLiteStoreLanguages(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreDiscoverySummary(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	repos := []model.Repository{
+		{
+			GhRepoID:        30,
+			Owner:           "ai",
+			Name:            "assistant",
+			FullName:        "ai/assistant",
+			Language:        "TypeScript",
+			Topics:          []string{"ai", "tools"},
+			Platforms:       []string{"macos", "linux"},
+			PopularityScore: 0.9,
+			ReleaseScore:    0.8,
+			TrendingScore:   0.7,
+			DiscoveryScore:  0.95,
+			IndexedAt:       now,
+		},
+		{
+			GhRepoID:        31,
+			Owner:           "privacy",
+			Name:            "proxy",
+			FullName:        "privacy/proxy",
+			Language:        "Go",
+			Topics:          []string{"privacy", "networking"},
+			Platforms:       []string{"server", "linux"},
+			PopularityScore: 0.6,
+			ReleaseScore:    0.4,
+			TrendingScore:   0.5,
+			DiscoveryScore:  0.7,
+			IndexedAt:       now,
+		},
+	}
+	for _, repo := range repos {
+		if err := store.UpsertRepo(context.Background(), repo); err != nil {
+			t.Fatalf("UpsertRepo() error = %v", err)
+		}
+	}
+	if err := store.ReplaceCategoryRanking(context.Background(), "most-popular", model.AllBucket, []model.RankingEntry{
+		{RepoID: 30, Rank: 1, Score: 0.9},
+	}); err != nil {
+		t.Fatalf("ReplaceCategoryRanking(popular) error = %v", err)
+	}
+	if err := store.ReplaceCategoryRanking(context.Background(), "new-releases", model.AllBucket, []model.RankingEntry{
+		{RepoID: 31, Rank: 1, Score: 0.8},
+	}); err != nil {
+		t.Fatalf("ReplaceCategoryRanking(new-releases) error = %v", err)
+	}
+
+	summary, err := store.DiscoverySummary(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverySummary() error = %v", err)
+	}
+	if len(summary.Modes) != 3 {
+		t.Fatalf("expected 3 discovery modes, got %+v", summary.Modes)
+	}
+	discover := findMode(t, summary, "discover")
+	if discover.Total != 2 {
+		t.Fatalf("discover total = %d", discover.Total)
+	}
+	if countForFacet(discover.Topics, "ai") != 1 || countForFacet(discover.Platforms, "linux") != 2 {
+		t.Fatalf("unexpected discover facets: topics=%+v platforms=%+v", discover.Topics, discover.Platforms)
+	}
+	popular := findMode(t, summary, "popular")
+	if popular.Total != 1 || countForFacet(popular.Languages, "TypeScript") != 1 {
+		t.Fatalf("unexpected popular summary: %+v", popular)
+	}
+	newReleases := findMode(t, summary, "new_releases")
+	if newReleases.Total != 1 || countForFacet(newReleases.Languages, "Go") != 1 {
+		t.Fatalf("unexpected new releases summary: %+v", newReleases)
+	}
+
+	allRepos, err := store.ListAllRepos(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllRepos() error = %v", err)
+	}
+	for _, repo := range allRepos {
+		if repo.RepoID == 30 && repo.CategoryRanks["popular"] != 1 {
+			t.Fatalf("expected popular category membership on repo 30, repo=%+v", repo)
+		}
+		if repo.RepoID == 31 && repo.CategoryRanks["new_releases"] != 1 {
+			t.Fatalf("expected new_releases category membership on repo 31, repo=%+v", repo)
+		}
+	}
+}
+
+func TestSQLiteStoreNewReleaseEligibilityRequiresStableAssetRelease(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	recent := now.AddDate(0, 0, -7)
+	for _, repo := range []model.Repository{
+		{
+			GhRepoID:        40,
+			Owner:           "release",
+			Name:            "qualified",
+			FullName:        "release/qualified",
+			Language:        "Swift",
+			Stars:           1000,
+			LatestReleaseAt: &recent,
+			ReleaseScore:    0.2,
+			IndexedAt:       now,
+		},
+		{
+			GhRepoID:        41,
+			Owner:           "release",
+			Name:            "no-assets",
+			FullName:        "release/no-assets",
+			Language:        "Swift",
+			Stars:           2000,
+			LatestReleaseAt: &recent,
+			ReleaseScore:    0.9,
+			IndexedAt:       now,
+		},
+	} {
+		if err := store.UpsertRepo(context.Background(), repo); err != nil {
+			t.Fatalf("UpsertRepo() error = %v", err)
+		}
+	}
+	if err := store.UpsertRelease(context.Background(), model.Release{
+		GhRepoID:      40,
+		TagName:       "v1.0.0",
+		HTMLURL:       "https://github.com/release/qualified/releases/tag/v1.0.0",
+		PublishedAt:   recent,
+		DownloadCount: 10,
+		Assets: []model.ReleaseAsset{
+			{Name: "qualified.zip", DownloadCount: 10},
+		},
+		IndexedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertRelease(qualified) error = %v", err)
+	}
+	if err := store.UpsertRelease(context.Background(), model.Release{
+		GhRepoID:    41,
+		TagName:     "v1.0.0",
+		HTMLURL:     "https://github.com/release/no-assets/releases/tag/v1.0.0",
+		PublishedAt: recent,
+		IndexedAt:   now,
+	}); err != nil {
+		t.Fatalf("UpsertRelease(no-assets) error = %v", err)
+	}
+
+	entries, err := store.TopRankingEntries(context.Background(), "release_score", QueryFilters{
+		Category:     "new-releases",
+		MinReleaseAt: now.AddDate(0, 0, -180).Format(time.RFC3339),
+	}, 10)
+	if err != nil {
+		t.Fatalf("TopRankingEntries(new-releases) error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].RepoID != 40 {
+		t.Fatalf("new release eligibility should require stable release assets: %+v", entries)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	store, err := NewSQLiteStore(context.Background(), filepath.Join(t.TempDir(), "test.db"))
@@ -178,4 +355,24 @@ func newTestStore(t *testing.T) *SQLiteStore {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func findMode(t *testing.T, summary model.DiscoverySummary, mode string) model.ModeSummary {
+	t.Helper()
+	for _, item := range summary.Modes {
+		if item.Mode == mode {
+			return item
+		}
+	}
+	t.Fatalf("mode %q not found in %+v", mode, summary.Modes)
+	return model.ModeSummary{}
+}
+
+func countForFacet(facets []model.FacetCount, key string) int {
+	for _, facet := range facets {
+		if facet.Key == key {
+			return facet.Count
+		}
+	}
+	return 0
 }

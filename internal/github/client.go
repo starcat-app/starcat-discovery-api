@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -87,36 +88,109 @@ func (c *Client) ListReleases(ctx context.Context, fullName string, perPage int)
 }
 
 func (c *Client) get(ctx context.Context, path string, out interface{}) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "starcat-discovery-api")
-	if token, ok := c.tokens.Next(); ok {
-		req.Header.Set("Authorization", "Bearer "+token)
+	maxAttempts := c.tokens.Count()
+	if maxAttempts == 0 {
+		return fmt.Errorf("no GitHub tokens configured")
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		token := c.tokens.PickBest()
+		if token == nil {
+			if earliest := c.tokens.EarliestAvailable(); !earliest.IsZero() {
+				return fmt.Errorf("no GitHub token available until %s", earliest.Format(time.RFC3339))
+			}
+			return fmt.Errorf("no GitHub token available")
+		}
 
-	if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining != "" {
-		value, _ := strconv.Atoi(remaining)
-		if c.rateLimitFloor > 0 && value > 0 && value < c.rateLimitFloor {
-			return fmt.Errorf("github rate limit remaining below floor: %d", value)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		req.Header.Set("User-Agent", "starcat-discovery-api")
+		req.Header.Set("Authorization", "Bearer "+token.Value)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		c.tokens.UpdateFromResponse(token, resp)
+		remainingBelowFloor := c.disableBelowFloor(token, resp)
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			defer resp.Body.Close()
+			return json.NewDecoder(resp.Body).Decode(out)
+		}
+
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		resp.Body.Close()
+
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			lastErr = fmt.Errorf("github api %s unauthorized with current token", path)
+			continue
+		case http.StatusForbidden, http.StatusTooManyRequests:
+			c.disableRateLimited(token, resp)
+			lastErr = fmt.Errorf("github api %s rate limited: %s", path, strings.TrimSpace(string(body)))
+			continue
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			lastErr = fmt.Errorf("github api %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+			continue
+		default:
+			if remainingBelowFloor {
+				lastErr = fmt.Errorf("github api %s returned %d with token below floor: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+				continue
+			}
+			return fmt.Errorf("github api %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var body map[string]interface{}
-		_ = json.NewDecoder(resp.Body).Decode(&body)
-		return fmt.Errorf("github api %s returned %d: %v", path, resp.StatusCode, body["message"])
+	if lastErr != nil {
+		return lastErr
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return fmt.Errorf("github api %s failed: no token attempts completed", path)
+}
+
+func (c *Client) disableBelowFloor(token *tokenpool.TokenState, resp *http.Response) bool {
+	if c.rateLimitFloor <= 0 {
+		return false
+	}
+	remaining := resp.Header.Get("X-RateLimit-Remaining")
+	if remaining == "" {
+		return false
+	}
+	value, err := strconv.Atoi(remaining)
+	if err != nil || value <= 0 || value >= c.rateLimitFloor {
+		return false
+	}
+	c.tokens.DisableUntil(token, resetAt(resp), fmt.Sprintf("remaining below floor: %d", value))
+	return true
+}
+
+func (c *Client) disableRateLimited(token *tokenpool.TokenState, resp *http.Response) {
+	until := resetAt(resp)
+	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
+			retryUntil := time.Now().Add(time.Duration(seconds) * time.Second)
+			if retryUntil.After(until) {
+				until = retryUntil
+			}
+		}
+	}
+	c.tokens.DisableUntil(token, until, fmt.Sprintf("rate limited status %d", resp.StatusCode))
+}
+
+func resetAt(resp *http.Response) time.Time {
+	if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+		if ts, err := strconv.ParseInt(reset, 10, 64); err == nil {
+			return time.Unix(ts, 0)
+		}
+	}
+	return time.Time{}
 }
 
 type searchResponse struct {

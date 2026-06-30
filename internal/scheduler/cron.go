@@ -16,21 +16,27 @@ type SyncService interface {
 	Sync(ctx context.Context, mode string) (model.SyncResult, error)
 }
 
+// CacheInvalidator 是后台同步完成后要主动失效的缓存。
+type CacheInvalidator interface {
+	Invalidate()
+}
+
 // Scheduler 封装 cron 任务生命周期。
 type Scheduler struct {
-	cron *cron.Cron
+	cron        *cron.Cron
+	invalidator CacheInvalidator
 }
 
 // New 创建同步调度器。
-func New(syncer SyncService, syncSpec, fullSyncSpec string) *Scheduler {
+func New(syncer SyncService, syncSpec, fullSyncSpec string, invalidator CacheInvalidator) *Scheduler {
 	c := cron.New()
 	mustAdd(c, syncSpec, func() {
-		run(syncer, "scheduled-light")
+		run(syncer, "scheduled-light", invalidator)
 	})
 	mustAdd(c, fullSyncSpec, func() {
-		run(syncer, "scheduled-full")
+		run(syncer, "scheduled-full", invalidator)
 	})
-	return &Scheduler{cron: c}
+	return &Scheduler{cron: c, invalidator: invalidator}
 }
 
 // Start 启动 cron。
@@ -52,13 +58,16 @@ func mustAdd(c *cron.Cron, spec string, fn func()) {
 	}
 }
 
-func run(syncer SyncService, mode string) {
+func run(syncer SyncService, mode string, invalidator CacheInvalidator) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	result, err := syncer.Sync(ctx, mode)
 	if err != nil {
 		log.Printf("[scheduler] sync %s failed: %v result=%+v", mode, err, result)
 		return
+	}
+	if invalidator != nil {
+		invalidator.Invalidate()
 	}
 	log.Printf("[scheduler] sync %s success: repos_seen=%d repos_upserted=%d", mode, result.ReposSeen, result.ReposUpserted)
 }

@@ -1,6 +1,6 @@
 # Starcat Discovery API
 
-`starcat-discovery-api` 为 Starcat 的「探索」入口提供发现流、热门榜单、新发布榜单和未来新版趋势候选。
+`starcat-discovery-api` 为 Starcat 的「探索」入口提供发现流、热门榜单、新发布榜单，并保留新版趋势候选诊断接口。
 
 本服务独立于 `starcat-trending-api`。旧趋势链路保持不变，新服务只负责 Discovery 相关能力。
 
@@ -48,13 +48,15 @@ GET /api/v1/discovery/feed
 GET /api/v1/discovery/categories/most-popular
 GET /api/v1/discovery/categories/new-releases
 GET /api/v1/discovery/categories/trending
+GET /api/v1/discovery/summary
+GET /api/v1/discovery/bulk
 GET /api/v1/discovery/languages
 GET /api/v1/discovery/topics
 GET /api/v1/discovery/platforms
 POST /internal/sync/discovery
 ```
 
-发现 / 热门 / 新发布接口读取 SQLite 预计算结果；管理同步入口触发 GitHub ingest 与榜单重建。趋势接口仅作为新版趋势候选保留，Starcat 客户端当前仍使用既有 `starcat-trending-api`。
+发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势接口仅作为新版趋势候选诊断保留，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
 
 ## 部署
 

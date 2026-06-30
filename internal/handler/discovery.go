@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dong4j/starcat-discovery-api/internal/model"
 	"github.com/dong4j/starcat-discovery-api/internal/store"
@@ -19,8 +21,11 @@ const (
 // DiscoveryStore 是 discovery 读取接口依赖的最小 store 契约。
 type DiscoveryStore interface {
 	ListScoredRepos(ctx context.Context, scoreColumn string, filters store.QueryFilters, page, limit int) (model.Page[model.DiscoveryItem], error)
+	ListSortedRepos(ctx context.Context, sortKey string, filters store.QueryFilters, page, limit int) (model.Page[model.DiscoveryItem], error)
 	ListCategoryRanking(ctx context.Context, category, bucket string, page, limit int) (model.Page[model.DiscoveryItem], error)
+	ListAllRepos(ctx context.Context) ([]model.DiscoveryItem, error)
 	ListLanguages(ctx context.Context) ([]model.LanguageStat, error)
+	DiscoverySummary(ctx context.Context) (model.DiscoverySummary, error)
 	RecordFeedExposure(ctx context.Context, feedKey string, repoIDs []int64) error
 }
 
@@ -40,7 +45,7 @@ func (h *DiscoveryHandler) HandleFeed(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, err := h.store.ListScoredRepos(r.Context(), "discovery_score", query.filters, query.page, query.limit)
+	page, err := h.listPageBySort(r.Context(), "discovery_score", query)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "STORE_ERROR", err.Error(), nil)
 		return
@@ -51,25 +56,78 @@ func (h *DiscoveryHandler) HandleFeed(w http.ResponseWriter, r *http.Request) {
 
 // HandleMostPopular 返回热门榜单。
 func (h *DiscoveryHandler) HandleMostPopular(w http.ResponseWriter, r *http.Request) {
-	h.handleCategory(w, r, categoryMostPopular, scoreColumnForPopular(r.URL.Query().Get("sort")))
+	sort := strings.TrimSpace(r.URL.Query().Get("sort"))
+	h.handleCategory(w, r, categoryMostPopular, scoreColumnForPopular(sort), sort == "" || sort == "popular")
 }
 
 // HandleNewReleases 返回新发布榜单。
 func (h *DiscoveryHandler) HandleNewReleases(w http.ResponseWriter, r *http.Request) {
-	h.handleCategory(w, r, categoryNewReleases, scoreColumnForNewReleases(r.URL.Query().Get("sort")))
+	sort := strings.TrimSpace(r.URL.Query().Get("sort"))
+	h.handleCategory(w, r, categoryNewReleases, scoreColumnForNewReleases(sort), sort == "" || sort == "release")
 }
 
-// HandleTrending 返回新版趋势候选。首期客户端不接入，只用于后端对比。
+// HandleTrending 返回新版趋势候选。该接口只做诊断对比，不进入 summary / bulk / Starcat UI。
 func (h *DiscoveryHandler) HandleTrending(w http.ResponseWriter, r *http.Request) {
-	h.handleCategory(w, r, categoryTrending, "trending_score")
+	h.handleCategory(w, r, categoryTrending, "trending_score", false)
 }
 
-func (h *DiscoveryHandler) handleCategory(w http.ResponseWriter, r *http.Request, category, scoreColumn string) {
+// HandleSummary 返回探索 Sidebar 所需的模式总量与筛选项计数。
+func (h *DiscoveryHandler) HandleSummary(w http.ResponseWriter, r *http.Request) {
+	summary, err := h.store.DiscoverySummary(r.Context())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "STORE_ERROR", err.Error(), nil)
+		return
+	}
+	WriteJSON(w, summary)
+}
+
+// HandleBulk 返回 discovery catalog 全量快照。
+//
+// Starcat 客户端用该快照落本地 SQLite，之后发现 / 热门 / 新发布的排序、筛选、分页都在
+// 本地完成；这个端点刻意不接收 query 参数，避免重新退回远端分页语义。
+func (h *DiscoveryHandler) HandleBulk(cache *BulkCache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if entry, ok := cache.Get(); ok {
+			writeBulkResponse(w, r, entry)
+			return
+		}
+		repos, err := h.store.ListAllRepos(r.Context())
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "STORE_ERROR", err.Error(), nil)
+			return
+		}
+		summary, err := h.store.DiscoverySummary(r.Context())
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "STORE_ERROR", err.Error(), nil)
+			return
+		}
+		env := model.Envelope[model.DiscoveryBulk]{
+			SchemaVersion: 1,
+			Data: model.DiscoveryBulk{
+				Repos:   repos,
+				Summary: summary,
+			},
+			Meta: &model.Meta{
+				Total:       len(repos),
+				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+			},
+		}
+		payload, err := json.Marshal(env)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "ENCODE_ERROR", err.Error(), nil)
+			return
+		}
+		writeBulkResponse(w, r, cache.Set(payload))
+	}
+}
+
+func (h *DiscoveryHandler) handleCategory(w http.ResponseWriter, r *http.Request, category, scoreColumn string, useRanking bool) {
 	query, ok := parseListQuery(w, r)
 	if !ok {
 		return
 	}
-	page, err := h.categoryPage(r.Context(), category, scoreColumn, query)
+	query.filters.Category = category
+	page, err := h.categoryPage(r.Context(), category, scoreColumn, query, useRanking)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "STORE_ERROR", err.Error(), nil)
 		return
@@ -77,8 +135,9 @@ func (h *DiscoveryHandler) handleCategory(w http.ResponseWriter, r *http.Request
 	writePage(w, page, category)
 }
 
-func (h *DiscoveryHandler) categoryPage(ctx context.Context, category, scoreColumn string, query listQuery) (model.Page[model.DiscoveryItem], error) {
+func (h *DiscoveryHandler) categoryPage(ctx context.Context, category, scoreColumn string, query listQuery, useRanking bool) (model.Page[model.DiscoveryItem], error) {
 	bucket, canUseRanking := rankingBucket(query.filters)
+	canUseRanking = canUseRanking && useRanking
 	if canUseRanking {
 		page, err := h.store.ListCategoryRanking(ctx, category, bucket, query.page, query.limit)
 		if err == nil && page.Total > 0 {
@@ -88,7 +147,28 @@ func (h *DiscoveryHandler) categoryPage(ctx context.Context, category, scoreColu
 			return model.Page[model.DiscoveryItem]{}, err
 		}
 	}
-	return h.store.ListScoredRepos(ctx, scoreColumn, query.filters, query.page, query.limit)
+	return h.listPageBySort(ctx, scoreColumn, query)
+}
+
+func (h *DiscoveryHandler) listPageBySort(ctx context.Context, defaultScoreColumn string, query listQuery) (model.Page[model.DiscoveryItem], error) {
+	switch query.sort {
+	case "":
+		return h.store.ListScoredRepos(ctx, defaultScoreColumn, query.filters, query.page, query.limit)
+	case "recommended":
+		return h.store.ListScoredRepos(ctx, "discovery_score", query.filters, query.page, query.limit)
+	case "popular":
+		return h.store.ListScoredRepos(ctx, "popularity_score", query.filters, query.page, query.limit)
+	case "activity":
+		return h.store.ListScoredRepos(ctx, "trending_score", query.filters, query.page, query.limit)
+	case "release":
+		return h.store.ListScoredRepos(ctx, "release_score", query.filters, query.page, query.limit)
+	case "stars":
+		return h.store.ListSortedRepos(ctx, "stars_desc", query.filters, query.page, query.limit)
+	case "stars_asc", "name_asc", "name_desc", "updated_desc", "updated_asc", "created_desc", "created_asc", "release_desc", "release_asc":
+		return h.store.ListSortedRepos(ctx, query.sort, query.filters, query.page, query.limit)
+	default:
+		return model.Page[model.DiscoveryItem]{}, strconv.ErrSyntax
+	}
 }
 
 // HandleLanguages 返回可用语言及数量。
@@ -114,6 +194,7 @@ func (h *DiscoveryHandler) HandlePlatforms(w http.ResponseWriter, r *http.Reques
 type listQuery struct {
 	page    int
 	limit   int
+	sort    string
 	filters store.QueryFilters
 }
 
@@ -132,6 +213,7 @@ func parseListQuery(w http.ResponseWriter, r *http.Request) (listQuery, bool) {
 	return listQuery{
 		page:  page,
 		limit: limit,
+		sort:  strings.TrimSpace(values.Get("sort")),
 		filters: store.QueryFilters{
 			Language: strings.TrimSpace(values.Get("language")),
 			Platform: strings.TrimSpace(values.Get("platform")),

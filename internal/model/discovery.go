@@ -131,36 +131,43 @@ type SyncResult struct {
 
 // DiscoveryItem 是 Starcat 客户端列表和详情页直接消费的卡片模型。
 type DiscoveryItem struct {
-	RepoID               int64    `json:"repo_id"`
-	FullName             string   `json:"full_name"`
-	Owner                string   `json:"owner"`
-	Name                 string   `json:"name"`
-	Description          string   `json:"description,omitempty"`
-	Homepage             string   `json:"homepage,omitempty"`
-	Language             string   `json:"language,omitempty"`
-	Stars                int      `json:"stars"`
-	Forks                int      `json:"forks"`
-	Watchers             int      `json:"watchers"`
-	Subscribers          int      `json:"subscribers"`
-	OpenIssues           int      `json:"open_issues"`
-	OwnerAvatar          string   `json:"owner_avatar,omitempty"`
-	DefaultBranch        string   `json:"default_branch,omitempty"`
-	LicenseSpdx          string   `json:"license_spdx,omitempty"`
-	Topics               []string `json:"topics"`
-	Platforms            []string `json:"platforms"`
-	PushedAt             string   `json:"pushed_at,omitempty"`
-	UpdatedAt            string   `json:"updated_at,omitempty"`
-	CreatedAt            string   `json:"created_at,omitempty"`
-	IsArchived           bool     `json:"is_archived"`
-	IsFork               bool     `json:"is_fork"`
-	LatestReleaseTag     string   `json:"latest_release_tag,omitempty"`
-	LatestReleaseAt      string   `json:"latest_release_at,omitempty"`
-	LatestReleaseURL     string   `json:"latest_release_url,omitempty"`
-	ReleaseDownloadCount int      `json:"release_download_count"`
-	Rank                 int      `json:"rank,omitempty"`
-	Score                float64  `json:"score,omitempty"`
-	Reasons              []string `json:"reasons"`
-	Signals              []Signal `json:"signals"`
+	RepoID               int64          `json:"repo_id"`
+	FullName             string         `json:"full_name"`
+	Owner                string         `json:"owner"`
+	Name                 string         `json:"name"`
+	Description          string         `json:"description,omitempty"`
+	Homepage             string         `json:"homepage,omitempty"`
+	Language             string         `json:"language,omitempty"`
+	Stars                int            `json:"stars"`
+	Forks                int            `json:"forks"`
+	Watchers             int            `json:"watchers"`
+	Subscribers          int            `json:"subscribers"`
+	OpenIssues           int            `json:"open_issues"`
+	OwnerAvatar          string         `json:"owner_avatar,omitempty"`
+	DefaultBranch        string         `json:"default_branch,omitempty"`
+	LicenseSpdx          string         `json:"license_spdx,omitempty"`
+	Topics               []string       `json:"topics"`
+	Platforms            []string       `json:"platforms"`
+	PushedAt             string         `json:"pushed_at,omitempty"`
+	UpdatedAt            string         `json:"updated_at,omitempty"`
+	CreatedAt            string         `json:"created_at,omitempty"`
+	IsArchived           bool           `json:"is_archived"`
+	IsFork               bool           `json:"is_fork"`
+	LatestReleaseTag     string         `json:"latest_release_tag,omitempty"`
+	LatestReleaseAt      string         `json:"latest_release_at,omitempty"`
+	LatestReleaseURL     string         `json:"latest_release_url,omitempty"`
+	ReleaseDownloadCount int            `json:"release_download_count"`
+	Rank                 int            `json:"rank,omitempty"`
+	Score                float64        `json:"score,omitempty"`
+	TrendingScore        float64        `json:"trending_score"`
+	PopularityScore      float64        `json:"popularity_score"`
+	ReleaseScore         float64        `json:"release_score"`
+	DiscoveryScore       float64        `json:"discovery_score"`
+	SearchScore          float64        `json:"search_score"`
+	Reasons              []string       `json:"reasons"`
+	Signals              []Signal       `json:"signals"`
+	Categories           []string       `json:"categories"`
+	CategoryRanks        map[string]int `json:"category_ranks"`
 }
 
 // Signal 是列表和详情中用于解释推荐理由的结构化信号。
@@ -191,4 +198,37 @@ type LanguageStat struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
 	Count int    `json:"count"`
+}
+
+// FacetCount 是 summary 接口返回给 Sidebar 的可计数筛选项。
+type FacetCount struct {
+	Key        string `json:"key"`
+	Label      string `json:"label"`
+	Count      int    `json:"count"`
+	SystemName string `json:"system_name,omitempty"`
+}
+
+// ModeSummary 描述探索一级子模块的总量和可展示筛选维度。
+type ModeSummary struct {
+	Mode      string       `json:"mode"`
+	Total     int          `json:"total"`
+	Topics    []FacetCount `json:"topics,omitempty"`
+	Platforms []FacetCount `json:"platforms,omitempty"`
+	Languages []FacetCount `json:"languages,omitempty"`
+}
+
+// DiscoverySummary 是 /api/v1/discovery/summary 的 data 结构。
+type DiscoverySummary struct {
+	Modes       []ModeSummary `json:"modes"`
+	GeneratedAt string        `json:"generated_at"`
+}
+
+// DiscoveryBulk 是 Starcat 客户端本地优先缓存使用的全量快照。
+//
+// repos 是当前 discovery catalog 的完整公开仓库集合；summary 与同一请求内 repos
+// 来自同一个 SQLite 读取时刻，客户端可以在单个 transaction 中一起落盘，避免列表和
+// Sidebar 计数分裂。
+type DiscoveryBulk struct {
+	Repos   []DiscoveryItem  `json:"repos"`
+	Summary DiscoverySummary `json:"summary"`
 }

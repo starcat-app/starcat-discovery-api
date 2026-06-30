@@ -221,13 +221,19 @@ func (s *Service) upsertRepo(ctx context.Context, repo github.Repository, releas
 }
 
 func (s *Service) refreshRankings(ctx context.Context) error {
-	categories := map[string]string{
-		categoryMostPopular: "popularity_score",
-		categoryNewReleases: "release_score",
-		categoryTrending:    "trending_score",
+	categories := []struct {
+		category    string
+		scoreColumn string
+	}{
+		{category: categoryMostPopular, scoreColumn: "popularity_score"},
+		{category: categoryNewReleases, scoreColumn: "release_score"},
 	}
-	for category, scoreColumn := range categories {
-		if err := s.replaceCategoryBucket(ctx, category, scoreColumn, model.AllBucket, store.QueryFilters{}); err != nil {
+	for _, item := range categories {
+		baseFilters := store.QueryFilters{Category: item.category}
+		if item.category == categoryNewReleases {
+			baseFilters.MinReleaseAt = s.now().AddDate(0, 0, -180).Format(time.RFC3339)
+		}
+		if err := s.replaceCategoryBucket(ctx, item.category, item.scoreColumn, model.AllBucket, baseFilters); err != nil {
 			return err
 		}
 		languages, err := s.store.ListLanguages(ctx)
@@ -236,13 +242,17 @@ func (s *Service) refreshRankings(ctx context.Context) error {
 		}
 		for _, language := range languages {
 			bucket := "language:" + language.Key
-			if err := s.replaceCategoryBucket(ctx, category, scoreColumn, bucket, store.QueryFilters{Language: language.Key}); err != nil {
+			filters := baseFilters
+			filters.Language = language.Key
+			if err := s.replaceCategoryBucket(ctx, item.category, item.scoreColumn, bucket, filters); err != nil {
 				return err
 			}
 		}
 		for _, platform := range model.DefaultPlatforms {
 			bucket := "platform:" + platform.Code
-			if err := s.replaceCategoryBucket(ctx, category, scoreColumn, bucket, store.QueryFilters{Platform: platform.Code}); err != nil {
+			filters := baseFilters
+			filters.Platform = platform.Code
+			if err := s.replaceCategoryBucket(ctx, item.category, item.scoreColumn, bucket, filters); err != nil {
 				return err
 			}
 		}

@@ -1,6 +1,6 @@
 // Package main 是 starcat-discovery-api 的入口。
 //
-// 本服务承载 Starcat 探索入口中的发现、热门、新发布和未来新版趋势能力。
+// 本服务承载 Starcat 探索入口中的发现、热门、新发布；新版趋势只保留诊断接口。
 // 首期保持独立服务边界，避免改动已有 starcat-trending-api 调用链。
 package main
 
@@ -50,8 +50,9 @@ func main() {
 	githubClient := github.NewClient(pool, cfg.RateLimitFloor)
 	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
 	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
+	bulkCache := handler.NewBulkCache()
 	if cfg.SyncEnabled {
-		sch := scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron)
+		sch := scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache)
 		sch.Start()
 		defer sch.Stop()
 	}
@@ -63,10 +64,12 @@ func main() {
 	mux.Handle("GET /api/v1/discovery/categories/most-popular", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleMostPopular)))
 	mux.Handle("GET /api/v1/discovery/categories/new-releases", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleNewReleases)))
 	mux.Handle("GET /api/v1/discovery/categories/trending", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
+	mux.Handle("GET /api/v1/discovery/summary", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleSummary)))
+	mux.Handle("GET /api/v1/discovery/bulk", apiAuth.Wrap(discoveryHandler.HandleBulk(bulkCache)))
 	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
 	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
 	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
-	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService)))
+	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService, bulkCache)))
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -83,6 +86,8 @@ func main() {
 	log.Printf("  GET  /api/v1/discovery/categories/most-popular - Popular ranking (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/categories/new-releases - New releases ranking (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/categories/trending     - New trending candidate (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/summary   - Sidebar totals and facet counts (api auth required)")
+	log.Printf("  GET  /api/v1/discovery/bulk      - Full local-first catalog snapshot (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/languages - Discovery languages metadata (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/topics    - Discovery topic metadata (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/platforms - Discovery platform metadata (api auth required)")

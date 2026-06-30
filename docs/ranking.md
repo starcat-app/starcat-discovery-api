@@ -15,3 +15,13 @@ Discovery 排序由后台任务预计算，HTTP 请求路径只读 SQLite 或内
 - fork repo 默认不进入新发布首屏。
 - prerelease / draft release 不作为新发布主信号。
 - 无实质 release asset 的项目降低新发布权重。
+
+## 分类资格
+
+`category_rankings` 不是同一批 repo 按不同 score 排序，而是先判断 repo 是否有资格进入某个分类，再写入该分类榜单。
+
+- `most-popular`: 排除 archived / fork；要求 stars 足够高或 `popularity_score` 达到热门阈值。
+- `new-releases`: 排除 archived / fork；要求 180 天内 stable release、非 draft、非 prerelease，且 release 包含真实 asset。
+- 新版趋势候选不写入 `category_rankings`，只保留诊断读取；Starcat 客户端趋势仍使用 `starcat-trending-api`。
+
+`bulk` 响应中的 `categories` / `category_ranks` 从 `category_rankings(bucket='__all__')` 回填，Starcat 客户端按这些字段做本地过滤。

@@ -159,6 +159,9 @@ func (s *SQLiteStore) UpsertRelease(ctx context.Context, release model.Release) 
 	if release.IndexedAt.IsZero() {
 		release.IndexedAt = time.Now().UTC()
 	}
+	if release.Assets == nil {
+		release.Assets = []model.ReleaseAsset{}
+	}
 	assetsJSON, err := json.Marshal(release.Assets)
 	if err != nil {
 		return err
@@ -298,6 +301,10 @@ func (s *SQLiteStore) TopRankingEntries(ctx context.Context, scoreColumn string,
 	where, args := buildFilterWhere(filters)
 	query := "SELECT r.gh_repo_id, r." + scoreColumn + " FROM repos r" + where +
 		" ORDER BY r." + scoreColumn + " DESC, r.stars DESC, r.gh_repo_id DESC LIMIT ?"
+	if filters.Category == "new-releases" && scoreColumn == "release_score" {
+		query = "SELECT r.gh_repo_id, r." + scoreColumn + " FROM repos r" + where +
+			" ORDER BY COALESCE(r.latest_release_at, '') DESC, r.release_score DESC, r.stars DESC, r.gh_repo_id DESC LIMIT ?"
+	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -405,6 +412,58 @@ func (s *SQLiteStore) ListScoredRepos(ctx context.Context, scoreColumn string, f
 	return makePage(items, total, page, limit), nil
 }
 
+// ListSortedRepos 按非 score 类通用排序读取列表。
+//
+// 这个方法只接收枚举 sortKey，不接收调用方拼好的 SQL 片段；ORDER BY 必须在
+// orderClauseForSortKey 白名单中生成，避免把 query 参数带进 SQL。
+func (s *SQLiteStore) ListSortedRepos(ctx context.Context, sortKey string, filters QueryFilters, page, limit int) (model.Page[model.DiscoveryItem], error) {
+	orderClause, ok := orderClauseForSortKey(sortKey)
+	if !ok {
+		return model.Page[model.DiscoveryItem]{}, fmt.Errorf("unsupported sort key %s", sortKey)
+	}
+	page, limit = normalizePage(page, limit)
+	where, args := buildFilterWhere(filters)
+	total, err := s.count(ctx, "SELECT COUNT(*) FROM repos r"+where, args...)
+	if err != nil {
+		return model.Page[model.DiscoveryItem]{}, err
+	}
+
+	query := "SELECT r.*, 0 AS rank, 0 AS score FROM repos r" + where +
+		" ORDER BY " + orderClause + " LIMIT ? OFFSET ?"
+	args = append(args, limit, (page-1)*limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return model.Page[model.DiscoveryItem]{}, err
+	}
+	defer rows.Close()
+	items, err := scanItems(rows)
+	if err != nil {
+		return model.Page[model.DiscoveryItem]{}, err
+	}
+	return makePage(items, total, page, limit), nil
+}
+
+// ListAllRepos 返回 discovery catalog 的完整公开仓库快照，供 bulk endpoint 使用。
+//
+// 这里不接受 filter / sort 参数：客户端拿到全量后在本地做筛选、排序和分页，保持与
+// Weekly bulk 同款的本地优先体验。
+func (s *SQLiteStore) ListAllRepos(ctx context.Context) ([]model.DiscoveryItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.*, 0 AS rank, r.discovery_score AS score
+		FROM repos r
+		ORDER BY r.discovery_score DESC, r.stars DESC, r.gh_repo_id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items, err := scanItems(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.attachCategoryMemberships(ctx, items)
+}
+
 // ListLanguages 聚合 discovery catalog 中可用语言。
 func (s *SQLiteStore) ListLanguages(ctx context.Context) ([]model.LanguageStat, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -433,11 +492,187 @@ func (s *SQLiteStore) ListLanguages(ctx context.Context) ([]model.LanguageStat, 
 	return result, rows.Err()
 }
 
+// DiscoverySummary 汇总探索 Sidebar 所需的模式总量与筛选项计数。
+func (s *SQLiteStore) DiscoverySummary(ctx context.Context) (model.DiscoverySummary, error) {
+	totalRepos, err := s.count(ctx, `SELECT COUNT(*) FROM repos`)
+	if err != nil {
+		return model.DiscoverySummary{}, err
+	}
+	discoverTopics, err := s.topicFacetCounts(ctx)
+	if err != nil {
+		return model.DiscoverySummary{}, err
+	}
+	discoverPlatforms, err := s.platformFacetCounts(ctx)
+	if err != nil {
+		return model.DiscoverySummary{}, err
+	}
+	popularTotal, err := s.categoryTotal(ctx, "most-popular")
+	if err != nil {
+		return model.DiscoverySummary{}, err
+	}
+	popularLanguages, err := s.categoryLanguageFacetCounts(ctx, "most-popular")
+	if err != nil {
+		return model.DiscoverySummary{}, err
+	}
+	newReleaseTotal, err := s.categoryTotal(ctx, "new-releases")
+	if err != nil {
+		return model.DiscoverySummary{}, err
+	}
+	newReleaseLanguages, err := s.categoryLanguageFacetCounts(ctx, "new-releases")
+	if err != nil {
+		return model.DiscoverySummary{}, err
+	}
+	return model.DiscoverySummary{
+		Modes: []model.ModeSummary{
+			{
+				Mode:      "discover",
+				Total:     totalRepos,
+				Topics:    discoverTopics,
+				Platforms: discoverPlatforms,
+			},
+			{
+				Mode:      "popular",
+				Total:     popularTotal,
+				Languages: popularLanguages,
+			},
+			{
+				Mode:      "new_releases",
+				Total:     newReleaseTotal,
+				Languages: newReleaseLanguages,
+			},
+		},
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
 // QueryFilters 是读取接口支持的通用过滤条件。
 type QueryFilters struct {
-	Language string
-	Platform string
-	Topic    string
+	Language     string
+	Platform     string
+	Topic        string
+	Category     string
+	MinReleaseAt string
+}
+
+func (s *SQLiteStore) categoryTotal(ctx context.Context, category string) (int, error) {
+	return s.count(ctx, `
+		SELECT COUNT(*)
+		FROM category_rankings
+		WHERE category = ? AND bucket = ?
+	`, category, model.AllBucket)
+}
+
+func (s *SQLiteStore) categoryLanguageFacetCounts(ctx context.Context, category string) ([]model.FacetCount, error) {
+	total, err := s.count(ctx, `
+		SELECT COUNT(*)
+		FROM category_rankings
+		WHERE category = ? AND bucket = ?
+	`, category, model.AllBucket)
+	if err != nil {
+		return nil, err
+	}
+	if total == 0 {
+		return []model.FacetCount{}, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(NULLIF(r.language, ''), ?) AS key, COUNT(*) AS count
+		FROM category_rankings cr
+		JOIN repos r ON r.gh_repo_id = cr.gh_repo_id
+		WHERE cr.category = ? AND cr.bucket = ?
+		GROUP BY key
+		ORDER BY CASE WHEN key = ? THEN 1 ELSE 0 END, count DESC, key ASC
+	`, model.UncategorizedLanguageKey, category, model.AllBucket, model.UncategorizedLanguageKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]model.FacetCount, 0)
+	for rows.Next() {
+		var item model.FacetCount
+		if err := rows.Scan(&item.Key, &item.Count); err != nil {
+			return nil, err
+		}
+		if item.Key == model.UncategorizedLanguageKey {
+			item.Label = "Uncategorized"
+		} else {
+			item.Label = item.Key
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) topicFacetCounts(ctx context.Context) ([]model.FacetCount, error) {
+	counts, err := s.codeCounts(ctx, "repo_topic_codes")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]model.FacetCount, 0, len(model.DefaultTopics))
+	for _, topic := range model.DefaultTopics {
+		result = append(result, model.FacetCount{
+			Key:   topic.Code,
+			Label: topic.Label,
+			Count: counts[topic.Code],
+		})
+	}
+	return result, nil
+}
+
+func (s *SQLiteStore) platformFacetCounts(ctx context.Context) ([]model.FacetCount, error) {
+	counts, err := s.codeCounts(ctx, "repo_platform_codes")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]model.FacetCount, 0, len(model.DefaultPlatforms))
+	for _, platform := range model.DefaultPlatforms {
+		result = append(result, model.FacetCount{
+			Key:        platform.Code,
+			Label:      platform.Label,
+			Count:      counts[platform.Code],
+			SystemName: platform.SystemName,
+		})
+	}
+	return result, nil
+}
+
+func (s *SQLiteStore) codeCounts(ctx context.Context, table string) (map[string]int, error) {
+	if table != "repo_topic_codes" && table != "repo_platform_codes" {
+		return nil, fmt.Errorf("unsupported code table %s", table)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT code, COUNT(*) AS count
+		FROM `+table+`
+		GROUP BY code
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int)
+	for rows.Next() {
+		var code string
+		var count int
+		if err := rows.Scan(&code, &count); err != nil {
+			return nil, err
+		}
+		result[code] = count
+	}
+	return result, rows.Err()
+}
+
+func languageStatsToFacets(languages []model.LanguageStat) []model.FacetCount {
+	result := make([]model.FacetCount, 0, len(languages))
+	for _, language := range languages {
+		result = append(result, model.FacetCount{
+			Key:   language.Key,
+			Label: language.Label,
+			Count: language.Count,
+		})
+	}
+	return result
 }
 
 func replaceCodes(ctx context.Context, tx *sql.Tx, table string, repoID int64, codes []string) error {
@@ -469,6 +704,7 @@ func replaceCodes(ctx context.Context, tx *sql.Tx, table string, repoID int64, c
 func buildFilterWhere(filters QueryFilters) (string, []interface{}) {
 	var clauses []string
 	args := []interface{}{}
+	appendCategoryEligibility(&clauses, &args, filters)
 	if filters.Language == model.UncategorizedLanguageKey {
 		clauses = append(clauses, "(r.language IS NULL OR r.language = '')")
 	} else if filters.Language != "" && filters.Language != model.AllBucket {
@@ -487,6 +723,98 @@ func buildFilterWhere(filters QueryFilters) (string, []interface{}) {
 		return "", args
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func appendCategoryEligibility(clauses *[]string, args *[]interface{}, filters QueryFilters) {
+	switch filters.Category {
+	case "most-popular":
+		*clauses = append(*clauses,
+			"r.is_archived = 0",
+			"r.is_fork = 0",
+			"(r.stars >= 1000 OR r.popularity_score >= 0.65)",
+		)
+	case "new-releases":
+		minReleaseAt := time.Now().UTC().AddDate(0, 0, -180).Format(time.RFC3339)
+		if strings.TrimSpace(filters.MinReleaseAt) != "" {
+			minReleaseAt = strings.TrimSpace(filters.MinReleaseAt)
+		}
+		*clauses = append(*clauses,
+			"r.is_archived = 0",
+			"r.is_fork = 0",
+			"r.latest_release_at IS NOT NULL",
+			"r.latest_release_at >= ?",
+			`EXISTS (
+				SELECT 1 FROM repo_releases rr
+				WHERE rr.gh_repo_id = r.gh_repo_id
+				  AND rr.draft = 0
+				  AND rr.prerelease = 0
+				  AND rr.published_at >= ?
+				  AND COALESCE(rr.assets_json, '[]') <> '[]'
+			)`,
+		)
+		*args = append(*args, minReleaseAt, minReleaseAt)
+	}
+}
+
+func (s *SQLiteStore) attachCategoryMemberships(ctx context.Context, items []model.DiscoveryItem) ([]model.DiscoveryItem, error) {
+	if len(items) == 0 {
+		return items, nil
+	}
+	indexByRepoID := make(map[int64]int, len(items))
+	for index := range items {
+		indexByRepoID[items[index].RepoID] = index
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT gh_repo_id, category, rank
+		FROM category_rankings
+		WHERE bucket = ?
+		ORDER BY gh_repo_id ASC, category ASC
+	`, model.AllBucket)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var repoID int64
+		var category string
+		var rank int
+		if err := rows.Scan(&repoID, &category, &rank); err != nil {
+			return nil, err
+		}
+		index, ok := indexByRepoID[repoID]
+		if !ok {
+			continue
+		}
+		mode := categoryMode(category)
+		if mode == "" {
+			continue
+		}
+		items[index].Categories = append(items[index].Categories, mode)
+		if items[index].CategoryRanks == nil {
+			items[index].CategoryRanks = map[string]int{}
+		}
+		items[index].CategoryRanks[mode] = rank
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range items {
+		normalizeDiscoveryItemSlices(&items[index])
+	}
+	return items, nil
+}
+
+func categoryMode(category string) string {
+	switch category {
+	case "most-popular":
+		return "popular"
+	case "new-releases":
+		return "new_releases"
+	default:
+		// 旧库里可能残留 category='trending' 的候选排名。Starcat 正式 discovery
+		// bulk 只暴露热门 / 新发布归属，未知 category 必须忽略，避免污染本地缓存。
+		return ""
+	}
 }
 
 func scanItems(rows *sql.Rows) ([]model.DiscoveryItem, error) {
@@ -509,6 +837,7 @@ func scanItem(rows *sql.Rows) (model.DiscoveryItem, error) {
 	var indexedAt string
 	var enrichedAt sql.NullString
 	var archived, fork int
+	var trendingScore, popularityScore, releaseScore, discoveryScore, searchScore float64
 	if err := rows.Scan(
 		&item.RepoID, &item.Owner, &item.Name, &item.FullName,
 		&description, &homepage, &language, &item.Stars, &item.Forks,
@@ -516,7 +845,7 @@ func scanItem(rows *sql.Rows) (model.DiscoveryItem, error) {
 		&defaultBranch, &licenseSpdx, &topicsJSON, &platformsJSON,
 		&pushedAt, &updatedAt, &createdAt, &archived, &fork,
 		&latestReleaseTag, &latestReleaseAt, &latestReleaseURL, &item.ReleaseDownloadCount,
-		new(float64), new(float64), new(float64), new(float64), new(float64),
+		&trendingScore, &popularityScore, &releaseScore, &discoveryScore, &searchScore,
 		&indexedAt, &enrichedAt, &item.Rank, &item.Score,
 	); err != nil {
 		return model.DiscoveryItem{}, err
@@ -535,6 +864,11 @@ func scanItem(rows *sql.Rows) (model.DiscoveryItem, error) {
 	item.LatestReleaseURL = nullString(latestReleaseURL)
 	item.IsArchived = archived == 1
 	item.IsFork = fork == 1
+	item.TrendingScore = trendingScore
+	item.PopularityScore = popularityScore
+	item.ReleaseScore = releaseScore
+	item.DiscoveryScore = discoveryScore
+	item.SearchScore = searchScore
 	_ = json.Unmarshal([]byte(topicsJSON), &item.Topics)
 	_ = json.Unmarshal([]byte(platformsJSON), &item.Platforms)
 	item.Signals = buildSignals(item)
@@ -555,6 +889,12 @@ func normalizeDiscoveryItemSlices(item *model.DiscoveryItem) {
 	}
 	if item.Signals == nil {
 		item.Signals = []model.Signal{}
+	}
+	if item.Categories == nil {
+		item.Categories = []string{}
+	}
+	if item.CategoryRanks == nil {
+		item.CategoryRanks = map[string]int{}
 	}
 }
 
@@ -631,6 +971,33 @@ func allowedScoreColumn(column string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func orderClauseForSortKey(sortKey string) (string, bool) {
+	switch sortKey {
+	case "name_asc":
+		return "lower(r.full_name) ASC, r.gh_repo_id DESC", true
+	case "name_desc":
+		return "lower(r.full_name) DESC, r.gh_repo_id DESC", true
+	case "stars_desc":
+		return "r.stars DESC, r.gh_repo_id DESC", true
+	case "stars_asc":
+		return "r.stars ASC, r.gh_repo_id DESC", true
+	case "updated_desc":
+		return "COALESCE(r.updated_at, r.pushed_at, r.created_at, '') DESC, r.gh_repo_id DESC", true
+	case "updated_asc":
+		return "COALESCE(r.updated_at, r.pushed_at, r.created_at, '') ASC, r.gh_repo_id DESC", true
+	case "created_desc":
+		return "COALESCE(r.created_at, '') DESC, r.gh_repo_id DESC", true
+	case "created_asc":
+		return "COALESCE(r.created_at, '') ASC, r.gh_repo_id DESC", true
+	case "release_desc":
+		return "COALESCE(r.latest_release_at, '') DESC, r.release_score DESC, r.gh_repo_id DESC", true
+	case "release_asc":
+		return "COALESCE(r.latest_release_at, '') ASC, r.release_score DESC, r.gh_repo_id DESC", true
+	default:
+		return "", false
 	}
 }
 

@@ -12,14 +12,24 @@ type SyncService interface {
 	Sync(ctx context.Context, mode string) (model.SyncResult, error)
 }
 
+// CacheInvalidator 是同步完成后需要主动失效的缓存。
+type CacheInvalidator interface {
+	Invalidate()
+}
+
 // HandleAdminSyncDiscovery 是 /internal/sync/discovery 的管理入口。
-func HandleAdminSyncDiscovery(syncer SyncService) http.HandlerFunc {
+func HandleAdminSyncDiscovery(syncer SyncService, invalidators ...CacheInvalidator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mode := r.URL.Query().Get("mode")
 		result, err := syncer.Sync(r.Context(), mode)
 		if err != nil {
 			WriteError(w, http.StatusBadGateway, "SYNC_FAILED", err.Error(), result)
 			return
+		}
+		for _, invalidator := range invalidators {
+			if invalidator != nil {
+				invalidator.Invalidate()
+			}
 		}
 		WriteJSON(w, result)
 	}
