@@ -94,7 +94,8 @@ func main() {
 	log.Printf("  GET  /internal/discovery/trending-candidates - New trending candidate diagnostics (admin auth required)")
 	log.Printf("  POST /internal/sync/discovery  - Manual discovery sync (admin auth required)")
 	log.Printf("  GET  /healthz                  - Health check (public)")
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, mux))
+	handler := middleware.CORS(mux)
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, handler))
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
