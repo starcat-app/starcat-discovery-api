@@ -4,12 +4,12 @@
 <div align="center">
 <a href="https://starcat.ink"><img src="https://raw.githubusercontent.com/dong4j/starcat-pro/main/banner.webp" width="100%" alt="Starcat" /></a>
 
-<p><strong>Self-hostable support API for Starcat discovery, hot repositories and new-release feeds.</strong></p>
-<p>Starcat is a native macOS app that turns GitHub Stars into a searchable, organized and AI-assisted knowledge base. It supports README rendering, tags, private notes, release tracking, repository health signals, AI summaries, semantic search, browser plugin workflows and self-hostable support APIs.</p>
+<p><strong>这是 Starcat 探索、热门、新发布仓库 feed 的可自部署支撑服务。</strong></p>
+<p>Starcat 是一款原生 macOS 应用，可以把 GitHub Stars 变成可搜索、可整理、可用 AI 理解的知识库。它支持 README 渲染、标签与私有笔记、Release 追踪、仓库健康度、AI 摘要、语义搜索、浏览器插件工作流，并提供多个可自部署 API。</p>
 
 <a href="https://github.com/dong4j/homebrew-starcat"><img src="https://img.shields.io/badge/Install%20with-Homebrew-FBBF24?style=for-the-badge&logo=homebrew&logoColor=white" width="220" alt="Install with Homebrew"/></a>
 <br/>
-<sub><a href="./README-ZH.md">中文说明</a></sub>
+<sub><a href="./README.md">English</a></sub>
 </div>
 
 <div align="center">
@@ -23,7 +23,7 @@
 <img width="900" src="https://raw.githubusercontent.com/dong4j/starcat-pro/main/main.webp" alt="Starcat main window"/>
 </div>
 
-**Preferred install method:**
+**首选 Homebrew 安装：**
 
 ```bash
 brew tap dong4j/starcat
@@ -31,16 +31,16 @@ brew trust dong4j/starcat
 brew install --cask starcat
 ```
 
-**Useful links:**
+**相关链接：**
 
-- Home: https://starcat.ink
-- Download: https://starcat.ink/downloads/Starcat-1.1.0-arm64.dmg
-- Public support and release notes: https://github.com/dong4j/starcat-pro
+- 官网: https://starcat.ink
+- 下载: https://starcat.ink/downloads/Starcat-1.1.0-arm64.dmg
+- 公开支持与发布说明: https://github.com/dong4j/starcat-pro
 - Homebrew tap: https://github.com/dong4j/homebrew-starcat
-- Browser plugins: [Chrome](https://github.com/dong4j/starcat-chrome-plugin) / [Safari](https://github.com/dong4j/starcat-safari-plugin)
-- Localization: https://github.com/dong4j/starcat-localization
+- 浏览器插件: [Chrome](https://github.com/dong4j/starcat-chrome-plugin) / [Safari](https://github.com/dong4j/starcat-safari-plugin)
+- 本地化: https://github.com/dong4j/starcat-localization
 
-**Starcat ecosystem:**
+**Starcat 生态项目：**
 
 - [starcat-sharing-api](https://github.com/dong4j/starcat-sharing-api)
 - [starcat-trending-api](https://github.com/dong4j/starcat-trending-api)
@@ -50,7 +50,7 @@ brew install --cask starcat
 - [starcat-discovery-api](https://github.com/dong4j/starcat-discovery-api)
 - [starcat-license-api](https://github.com/dong4j/starcat-license-api)
 
-> Starcat provides hosted defaults for normal users. This API is open source so advanced users can inspect it, run it locally, or deploy their own instance.
+> Starcat 为普通用户提供默认托管服务。这个 API 开源出来，是为了让进阶用户可以审查实现、本地运行，或部署自己的实例。
 <!-- starcat-promo:end -->
 
 `starcat-discovery-api` 为 Starcat 的「探索」入口提供发现流、热门榜单、新发布榜单，并保留新版趋势候选诊断接口。
