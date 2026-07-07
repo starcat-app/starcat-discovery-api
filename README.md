@@ -111,6 +111,81 @@ POST /internal/sync/discovery
 
 发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势候选只保留在 `/internal/discovery/trending-candidates`，需要 Admin API Key，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
 
+## 同步与分类逻辑
+
+### 轻量同步
+
+```mermaid
+sequenceDiagram
+    participant Scheduler as Scheduler
+    participant Ingest as ingest.Sync(scheduled-light)
+    participant GitHub as GitHub API
+    participant SQLite as SQLite
+    participant BulkCache as Bulk Cache
+
+    Scheduler->>Ingest: 按 SYNC_CRON 触发
+    Ingest->>SQLite: StartSyncRun(mode)
+    loop 每个 default seed
+        Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
+        loop 每个去重候选 repo
+            Ingest->>GitHub: GetRepository(full_name)
+            Ingest->>GitHub: ListReleases(full_name, 5)
+            Ingest->>SQLite: UpsertRepo(repo + scores + topics + platforms)
+            Ingest->>SQLite: UpsertRelease(recent releases)
+            Ingest->>SQLite: RecordDailySnapshot(stars/forks/downloads)
+        end
+    end
+    Ingest->>SQLite: ReplaceCategoryRanking(popular/new-releases)
+    Ingest->>SQLite: ReplaceTopicRanking(topic/platform)
+    Ingest->>SQLite: FinishSyncRun(success/failure)
+    Ingest->>BulkCache: Invalidate()
+```
+
+轻量同步由 `SYNC_CRON` 控制，默认 `17 */3 * * *`，即每 3 小时一次。它从 GitHub Search 拉候选仓库，再为每个候选仓库拉 repo 详情和最近 5 个 releases，写入或更新 `repos`、`repo_releases`、`repo_topic_codes`、`repo_platform_codes`、`repo_daily_snapshots`、`category_rankings`、`topic_rankings` 和 `sync_runs`。轻量同步只做 upsert 和排名重建，不删除这轮没命中的旧 repo。
+
+### 全量同步
+
+```mermaid
+sequenceDiagram
+    participant Scheduler as Scheduler
+    participant Ingest as ingest.Sync(scheduled-full)
+    participant GitHub as GitHub API
+    participant SQLite as SQLite
+    participant BulkCache as Bulk Cache
+
+    Scheduler->>Ingest: 按 FULL_SYNC_CRON 触发
+    Ingest->>SQLite: StartSyncRun(mode)
+    loop 每个 default seed
+        Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
+        loop 每个去重候选 repo
+            Ingest->>GitHub: GetRepository(full_name)
+            Ingest->>GitHub: ListReleases(full_name, 5)
+            Ingest->>SQLite: UpsertRepo(repo + scores + topics + platforms)
+            Ingest->>SQLite: UpsertRelease(recent releases)
+            Ingest->>SQLite: RecordDailySnapshot(stars/forks/downloads)
+        end
+    end
+    Ingest->>SQLite: PruneReposNotIn(candidateIDs)
+    Ingest->>SQLite: ReplaceCategoryRanking(popular/new-releases)
+    Ingest->>SQLite: ReplaceTopicRanking(topic/platform)
+    Ingest->>SQLite: FinishSyncRun(success/failure)
+    Ingest->>BulkCache: Invalidate()
+```
+
+全量同步由 `FULL_SYNC_CRON` 控制，默认 `23 2 * * *`，即每天 UTC 02:23 一次。它和轻量同步拉取同样的候选 repo、repo 详情和 release 数据，但会额外执行 `PruneReposNotIn(candidateIDs)`，删除本轮 GitHub Search 候选集之外的旧 repo。因此全量同步不是让数据无限增长，而是把 catalog 收敛到当前 seed 命中的候选集合。
+
+当前候选发现来自 8 条固定 GitHub Search seed：`topic:llm stars:>100 archived:false`、`topic:machine-learning stars:>500 archived:false`、`topic:privacy stars:>100 archived:false`、`topic:networking stars:>100 archived:false`、`topic:media stars:>100 archived:false`、`topic:social stars:>100 archived:false`、`topic:rss stars:>100 archived:false`、`topic:cli stars:>100 archived:false`。每条 seed 最多取 `searchLimit` 个结果，`NewService` 会把该值限制到最高 50；所以理论候选上限约为 8 × 50，去重后通常接近 400。数据量长期稳定在这个范围是预期行为。
+
+### 发现 / 热门 / 新发布
+
+| 分类 | 数据来源 | 规则 | 默认排序 |
+|---|---|---|---|
+| 发现 | `repos` 全量 catalog，并结合 `topic_rankings` 提供 topic / platform 预计算排名 | 仓库来自同步 seed 命中的候选集；同步时按仓库元数据和 seed topic 生成 topics，按仓库属性和 releases 推断 platforms；接口可按 topic、platform、language 等条件筛选 | `discovery_score DESC`，同分时按 stars 和 repo id 兜底 |
+| 热门 | `category_rankings(category = "most-popular")` | 非 archived、非 fork，且满足 `stars >= 1000` 或 `popularity_score >= 0.65` | `popularity_score DESC`，按 bucket 预计算 rank |
+| 新发布 | `category_rankings(category = "new-releases")` | 非 archived、非 fork；存在最近 180 天内的 stable release；该 release 不是 draft / prerelease，且 assets 非空 | `latest_release_at DESC`，再按 `release_score DESC`、stars、repo id 兜底 |
+
+`/api/v1/discovery/bulk` 返回完整公开 catalog 和 summary，供 Starcat 客户端本地优先缓存后在本地完成筛选、排序和分页。后端 bulk 进程内缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 900 秒；每次同步成功后会主动失效该缓存，下一次 `/bulk` 请求会重新从 SQLite 构建响应。
+
 ## 部署
 
 ```bash
