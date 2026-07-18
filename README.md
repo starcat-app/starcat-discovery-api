@@ -89,6 +89,7 @@ The default port is `5006`.
 | `SYNC_CRON` | No | `17 */3 * * *` | Light sync cron schedule |
 | `FULL_SYNC_CRON` | No | `23 2 * * *` | Full sync cron schedule |
 | `CACHE_TTL_SECONDS` | No | `900` | In-memory cache TTL for `/discovery/bulk` |
+| `FEED_TARGET_SIZE` | No | `500` | Global GitHub Search candidate budget per sync, capped by the service at `1600` |
 
 ## API
 
@@ -125,8 +126,8 @@ sequenceDiagram
 
     Scheduler->>Ingest: Trigger on SYNC_CRON
     Ingest->>SQLite: StartSyncRun(mode)
-    loop Each default seed
-        Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
+    loop Each candidate search plan
+        Ingest->>GitHub: SearchRepositories(query, sort, limit)
         loop Each deduplicated candidate repo
             Ingest->>GitHub: GetRepository(full_name)
             Ingest->>GitHub: ListReleases(full_name, 5)
@@ -155,8 +156,8 @@ sequenceDiagram
 
     Scheduler->>Ingest: Trigger on FULL_SYNC_CRON
     Ingest->>SQLite: StartSyncRun(mode)
-    loop Each default seed
-        Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
+    loop Each candidate search plan
+        Ingest->>GitHub: SearchRepositories(query, sort, limit)
         loop Each deduplicated candidate repo
             Ingest->>GitHub: GetRepository(full_name)
             Ingest->>GitHub: ListReleases(full_name, 5)
@@ -172,9 +173,9 @@ sequenceDiagram
     Ingest->>BulkCache: Invalidate()
 ```
 
-`FULL_SYNC_CRON` controls the full sync. Its default schedule, `23 2 * * *`, runs daily at 02:23 UTC. It fetches the same candidate repositories, repository details, and release data as a light sync. It also runs `PruneReposNotIn(candidateIDs)` to delete existing repositories outside the current GitHub Search candidate set. This keeps the catalog aligned with repositories matched by the current seeds instead of allowing unbounded growth.
+`FULL_SYNC_CRON` controls the full sync. Its default schedule, `23 2 * * *`, runs daily at 02:23 UTC. It fetches the same candidate repositories, repository details, and release data as a light sync. It also runs `PruneReposNotIn(candidateIDs)` to delete existing repositories outside the current GitHub Search candidate set. This keeps the catalog aligned with the current rolling candidate set instead of allowing unbounded growth.
 
-Candidate discovery currently uses eight fixed GitHub Search seeds: `topic:llm stars:>100 archived:false`, `topic:machine-learning stars:>500 archived:false`, `topic:privacy stars:>100 archived:false`, `topic:networking stars:>100 archived:false`, `topic:media stars:>100 archived:false`, `topic:social stars:>100 archived:false`, `topic:rss stars:>100 archived:false`, and `topic:cli stars:>100 archived:false`. Each seed returns at most `searchLimit` results, and `NewService` caps that value at 50. The theoretical maximum is therefore about 8 × 50 candidates, usually close to 400 after deduplication. The data set is expected to remain near this size over time.
+Candidate discovery still covers the eight `llm`, `machine-learning`, `privacy`, `networking`, `media`, `social`, `rss`, and `cli` topics, but each topic no longer samples only the highest-starred repositories. `FEED_TARGET_SIZE` is a global per-sync candidate budget, defaulting to `500` and capped at `1600`. After being distributed across topics, each topic's budget is split into 50% head, 30% active in the last 30 days, and 20% emerging in the last year. Results are deduplicated by GitHub repository ID before ingestion. This allows membership to react to activity and new projects while the fixed budget and full-sync pruning keep the catalog bounded.
 
 ### Discovery, Popular, and New Releases
 

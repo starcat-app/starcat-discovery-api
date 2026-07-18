@@ -13,4 +13,4 @@
 | `CACHE_TTL_SECONDS` | 否 | `/discovery/bulk` 进程内缓存 TTL |
 | `MAX_SEARCH_CALLS_PER_MINUTE` | 否 | GitHub Search API 保护阈值 |
 | `RATE_LIMIT_FLOOR` | 否 | token 剩余额度低于该值时停止非必要请求 |
-| `FEED_TARGET_SIZE` | 否 | 每个平台每日 feed 候选规模 |
+| `FEED_TARGET_SIZE` | 否 | 每轮 GitHub Search 的全局候选预算，默认 `500`，服务端最高限制为 `1600` |

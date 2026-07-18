@@ -14,14 +14,18 @@ import (
 )
 
 const (
-	categoryMostPopular = "most-popular"
-	categoryNewReleases = "new-releases"
-	categoryTrending    = "trending"
+	categoryMostPopular        = "most-popular"
+	categoryNewReleases        = "new-releases"
+	categoryTrending           = "trending"
+	defaultCandidateTargetSize = 500
+	maxCandidateTargetSize     = 1600
+	activeWindowDays           = 30
+	emergingWindowDays         = 365
 )
 
 // GitHubClient 是 ingest 依赖的 GitHub 最小接口，便于测试替换。
 type GitHubClient interface {
-	SearchRepositories(ctx context.Context, query string, perPage int) ([]github.Repository, error)
+	SearchRepositories(ctx context.Context, options github.RepositorySearchOptions) ([]github.Repository, error)
 	GetRepository(ctx context.Context, fullName string) (github.Repository, error)
 	ListReleases(ctx context.Context, fullName string, perPage int) ([]github.Release, error)
 }
@@ -42,25 +46,25 @@ type Store interface {
 
 // Service 编排 discovery 同步流程。
 type Service struct {
-	store       Store
-	github      GitHubClient
-	searchLimit int
-	now         func() time.Time
+	store               Store
+	github              GitHubClient
+	candidateTargetSize int
+	now                 func() time.Time
 }
 
 // NewService 创建同步服务。
-func NewService(store Store, github GitHubClient, searchLimit int) *Service {
-	if searchLimit <= 0 {
-		searchLimit = 30
+func NewService(store Store, github GitHubClient, candidateTargetSize int) *Service {
+	if candidateTargetSize <= 0 {
+		candidateTargetSize = defaultCandidateTargetSize
 	}
-	if searchLimit > 50 {
-		searchLimit = 50
+	if candidateTargetSize > maxCandidateTargetSize {
+		candidateTargetSize = maxCandidateTargetSize
 	}
 	return &Service{
-		store:       store,
-		github:      github,
-		searchLimit: searchLimit,
-		now:         func() time.Time { return time.Now().UTC() },
+		store:               store,
+		github:              github,
+		candidateTargetSize: candidateTargetSize,
+		now:                 func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -119,10 +123,15 @@ func (s *Service) Sync(ctx context.Context, mode string) (model.SyncResult, erro
 func (s *Service) syncSeeds(ctx context.Context, result *model.SyncResult) ([]int64, error) {
 	seen := map[int64]bool{}
 	candidateIDs := make([]int64, 0)
-	for _, seed := range defaultSeeds() {
-		repos, err := s.github.SearchRepositories(ctx, seed.Query, s.searchLimit)
+	for _, plan := range buildSearchPlans(s.now(), s.candidateTargetSize) {
+		repos, err := s.github.SearchRepositories(ctx, github.RepositorySearchOptions{
+			Query:   plan.Query,
+			Sort:    plan.Sort,
+			Order:   "desc",
+			PerPage: plan.Limit,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("search seed %s: %w", seed.Query, err)
+			return nil, fmt.Errorf("search %s candidates for %s: %w", plan.Kind, plan.Query, err)
 		}
 		for _, candidate := range repos {
 			if candidate.ID > 0 && seen[candidate.ID] {
@@ -143,7 +152,7 @@ func (s *Service) syncSeeds(ctx context.Context, result *model.SyncResult) ([]in
 				log.Printf("[ingest] list releases %s failed: %v", repo.FullName, err)
 				releases = nil
 			}
-			if err := s.upsertRepo(ctx, repo, releases, seed.Topic); err != nil {
+			if err := s.upsertRepo(ctx, repo, releases, plan.Topic); err != nil {
 				log.Printf("[ingest] upsert repo %s failed: %v", repo.FullName, err)
 				continue
 			}
@@ -309,21 +318,89 @@ func (s *Service) replaceTopicBucket(ctx context.Context, topic, platform string
 }
 
 type seed struct {
+	Topic         string
+	Query         string
+	EmergingQuery string
+}
+
+type searchPlan struct {
 	Topic string
+	Kind  string
 	Query string
+	Sort  string
+	Limit int
 }
 
 func defaultSeeds() []seed {
 	return []seed{
-		{Topic: "ai", Query: "topic:llm stars:>100 archived:false"},
-		{Topic: "ai", Query: "topic:machine-learning stars:>500 archived:false"},
-		{Topic: "privacy", Query: "topic:privacy stars:>100 archived:false"},
-		{Topic: "networking", Query: "topic:networking stars:>100 archived:false"},
-		{Topic: "media", Query: "topic:media stars:>100 archived:false"},
-		{Topic: "social", Query: "topic:social stars:>100 archived:false"},
-		{Topic: "reading", Query: "topic:rss stars:>100 archived:false"},
-		{Topic: "tools", Query: "topic:cli stars:>100 archived:false"},
+		{Topic: "ai", Query: "topic:llm stars:>100 archived:false", EmergingQuery: "topic:llm stars:>20 archived:false"},
+		{Topic: "ai", Query: "topic:machine-learning stars:>500 archived:false", EmergingQuery: "topic:machine-learning stars:>50 archived:false"},
+		{Topic: "privacy", Query: "topic:privacy stars:>100 archived:false", EmergingQuery: "topic:privacy stars:>20 archived:false"},
+		{Topic: "networking", Query: "topic:networking stars:>100 archived:false", EmergingQuery: "topic:networking stars:>20 archived:false"},
+		{Topic: "media", Query: "topic:media stars:>100 archived:false", EmergingQuery: "topic:media stars:>20 archived:false"},
+		{Topic: "social", Query: "topic:social stars:>100 archived:false", EmergingQuery: "topic:social stars:>20 archived:false"},
+		{Topic: "reading", Query: "topic:rss stars:>100 archived:false", EmergingQuery: "topic:rss stars:>20 archived:false"},
+		{Topic: "tools", Query: "topic:cli stars:>100 archived:false", EmergingQuery: "topic:cli stars:>20 archived:false"},
 	}
+}
+
+// buildSearchPlans 把全局候选预算拆成三路：头部 50%、近期活跃 30%、一年内新兴 20%。
+//
+// 旧实现对每个主题永远只取 stars Top 50，定时任务虽然成功，候选成员却几乎不换。
+// 这里仍维持固定总预算和单页上限，但让活跃项目与新项目拥有独立入口；全量同步继续负责淘汰。
+func buildSearchPlans(now time.Time, targetSize int) []searchPlan {
+	seeds := defaultSeeds()
+	if targetSize <= 0 {
+		targetSize = defaultCandidateTargetSize
+	}
+	if targetSize > maxCandidateTargetSize {
+		targetSize = maxCandidateTargetSize
+	}
+
+	seedLimits := distributeEvenly(targetSize, len(seeds))
+	activeSince := now.AddDate(0, 0, -activeWindowDays).Format("2006-01-02")
+	emergingSince := now.AddDate(0, 0, -emergingWindowDays).Format("2006-01-02")
+	plans := make([]searchPlan, 0, len(seeds)*3)
+	for index, seed := range seeds {
+		limits := candidateStrategyLimits(seedLimits[index])
+		candidates := []searchPlan{
+			{Topic: seed.Topic, Kind: "head", Query: seed.Query, Sort: "stars", Limit: limits[0]},
+			{Topic: seed.Topic, Kind: "active", Query: seed.Query + " pushed:>=" + activeSince, Sort: "updated", Limit: limits[1]},
+			{Topic: seed.Topic, Kind: "emerging", Query: seed.EmergingQuery + " created:>=" + emergingSince, Sort: "stars", Limit: limits[2]},
+		}
+		for _, candidate := range candidates {
+			if candidate.Limit > 0 {
+				plans = append(plans, candidate)
+			}
+		}
+	}
+	return plans
+}
+
+func distributeEvenly(total, slots int) []int {
+	if total <= 0 || slots <= 0 {
+		return nil
+	}
+	values := make([]int, slots)
+	for index := range values {
+		values[index] = total / slots
+		if index < total%slots {
+			values[index]++
+		}
+	}
+	return values
+}
+
+func candidateStrategyLimits(total int) [3]int {
+	limits := [3]int{
+		total * 5 / 10,
+		total * 3 / 10,
+		total * 2 / 10,
+	}
+	for remaining, index := total-(limits[0]+limits[1]+limits[2]), 0; remaining > 0; remaining, index = remaining-1, index+1 {
+		limits[index%len(limits)]++
+	}
+	return limits
 }
 
 func latestStableRelease(releases []github.Release) *github.Release {

@@ -32,7 +32,10 @@ func TestClientRetriesNextTokenOnRateLimit(t *testing.T) {
 	client := NewClient(tokens, 50).WithBaseURL(server.URL)
 	client.httpClient = server.Client()
 
-	repos, err := client.SearchRepositories(t.Context(), "topic:ai", 1)
+	repos, err := client.SearchRepositories(t.Context(), RepositorySearchOptions{
+		Query:   "topic:ai",
+		PerPage: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +71,10 @@ func TestClientKeepsSuccessWhenRemainingBelowFloorAndSkipsTokenLater(t *testing.
 	client := NewClient(tokens, 50).WithBaseURL(server.URL)
 	client.httpClient = server.Client()
 
-	first, err := client.SearchRepositories(t.Context(), "topic:ai", 1)
+	first, err := client.SearchRepositories(t.Context(), RepositorySearchOptions{
+		Query:   "topic:ai",
+		PerPage: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +82,10 @@ func TestClientKeepsSuccessWhenRemainingBelowFloorAndSkipsTokenLater(t *testing.
 		t.Fatalf("low-floor success should still be returned, got %#v", first)
 	}
 
-	second, err := client.SearchRepositories(t.Context(), "topic:ai", 1)
+	second, err := client.SearchRepositories(t.Context(), RepositorySearchOptions{
+		Query:   "topic:ai",
+		PerPage: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,5 +97,36 @@ func TestClientKeepsSuccessWhenRemainingBelowFloorAndSkipsTokenLater(t *testing.
 	}
 	if authHeaders[0] == authHeaders[1] {
 		t.Fatalf("token below floor should be skipped on next request, got %q", authHeaders[0])
+	}
+}
+
+func TestClientSearchRepositoriesUsesCandidateStrategyOptions(t *testing.T) {
+	tokens := tokenpool.New([]string{"github_pat_token_one_123456"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("q") != "topic:llm pushed:>=2026-06-18" {
+			t.Fatalf("q = %q", query.Get("q"))
+		}
+		if query.Get("sort") != "updated" || query.Get("order") != "desc" {
+			t.Fatalf("unexpected ordering: %s %s", query.Get("sort"), query.Get("order"))
+		}
+		if query.Get("per_page") != "100" {
+			t.Fatalf("per_page = %q, want client cap 100", query.Get("per_page"))
+		}
+		w.Header().Set("X-RateLimit-Remaining", "4000")
+		_ = json.NewEncoder(w).Encode(searchResponse{})
+	}))
+	defer server.Close()
+
+	client := NewClient(tokens, 50).WithBaseURL(server.URL)
+	client.httpClient = server.Client()
+	_, err := client.SearchRepositories(t.Context(), RepositorySearchOptions{
+		Query:   "topic:llm pushed:>=2026-06-18",
+		Sort:    "updated",
+		Order:   "desc",
+		PerPage: 150,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

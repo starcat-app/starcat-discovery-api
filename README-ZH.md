@@ -89,6 +89,7 @@ go run ./cmd/server/
 | `SYNC_CRON` | 否 | `17 */3 * * *` | 轻同步 cron |
 | `FULL_SYNC_CRON` | 否 | `23 2 * * *` | 全量同步 cron |
 | `CACHE_TTL_SECONDS` | 否 | `900` | `/discovery/bulk` 进程内缓存 TTL |
+| `FEED_TARGET_SIZE` | 否 | `500` | 每轮 GitHub Search 的全局候选预算，服务端最高限制为 `1600` |
 
 ## API
 
@@ -125,8 +126,8 @@ sequenceDiagram
 
     Scheduler->>Ingest: 按 SYNC_CRON 触发
     Ingest->>SQLite: StartSyncRun(mode)
-    loop 每个 default seed
-        Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
+    loop 每个候选搜索计划
+        Ingest->>GitHub: SearchRepositories(query, sort, limit)
         loop 每个去重候选 repo
             Ingest->>GitHub: GetRepository(full_name)
             Ingest->>GitHub: ListReleases(full_name, 5)
@@ -155,8 +156,8 @@ sequenceDiagram
 
     Scheduler->>Ingest: 按 FULL_SYNC_CRON 触发
     Ingest->>SQLite: StartSyncRun(mode)
-    loop 每个 default seed
-        Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
+    loop 每个候选搜索计划
+        Ingest->>GitHub: SearchRepositories(query, sort, limit)
         loop 每个去重候选 repo
             Ingest->>GitHub: GetRepository(full_name)
             Ingest->>GitHub: ListReleases(full_name, 5)
@@ -172,9 +173,9 @@ sequenceDiagram
     Ingest->>BulkCache: Invalidate()
 ```
 
-全量同步由 `FULL_SYNC_CRON` 控制，默认 `23 2 * * *`，即每天 UTC 02:23 一次。它和轻量同步拉取同样的候选 repo、repo 详情和 release 数据，但会额外执行 `PruneReposNotIn(candidateIDs)`，删除本轮 GitHub Search 候选集之外的旧 repo。因此全量同步不是让数据无限增长，而是把 catalog 收敛到当前 seed 命中的候选集合。
+全量同步由 `FULL_SYNC_CRON` 控制，默认 `23 2 * * *`，即每天 UTC 02:23 一次。它和轻量同步拉取同样的候选 repo、repo 详情和 release 数据，但会额外执行 `PruneReposNotIn(candidateIDs)`，删除本轮 GitHub Search 候选集之外的旧 repo。因此全量同步不是让数据无限增长，而是把 catalog 收敛到当前搜索计划命中的滚动候选集合。
 
-当前候选发现来自 8 条固定 GitHub Search seed：`topic:llm stars:>100 archived:false`、`topic:machine-learning stars:>500 archived:false`、`topic:privacy stars:>100 archived:false`、`topic:networking stars:>100 archived:false`、`topic:media stars:>100 archived:false`、`topic:social stars:>100 archived:false`、`topic:rss stars:>100 archived:false`、`topic:cli stars:>100 archived:false`。每条 seed 最多取 `searchLimit` 个结果，`NewService` 会把该值限制到最高 50；所以理论候选上限约为 8 × 50，去重后通常接近 400。数据量长期稳定在这个范围是预期行为。
+候选发现仍围绕 `llm`、`machine-learning`、`privacy`、`networking`、`media`、`social`、`rss`、`cli` 这 8 个主题，但每个主题不再只取 stars 头部。`FEED_TARGET_SIZE` 是每轮同步的全局候选预算，默认 `500`、最高 `1600`；预算按主题均分后，再按「头部 50% / 近 30 天活跃 30% / 近一年新兴 20%」拆分搜索，并在入库前按 GitHub repo id 去重。这样可以让候选成员随活跃度和新项目变化，同时继续由固定预算与全量同步裁剪保证 catalog 有界。
 
 ### 发现 / 热门 / 新发布
 

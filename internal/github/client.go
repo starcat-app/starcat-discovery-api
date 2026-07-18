@@ -17,6 +17,17 @@ import (
 
 const defaultBaseURL = "https://api.github.com"
 
+// RepositorySearchOptions 描述一次候选仓库搜索。
+//
+// Discovery 需要同时拉取头部、近期活跃和新兴项目，因此 sort 不能再由 client 固定为 stars。
+// 调用方仍只请求单页；候选规模由 ingest 按不同策略分配，避免无界分页拖垮 GitHub 配额。
+type RepositorySearchOptions struct {
+	Query   string
+	Sort    string
+	Order   string
+	PerPage int
+}
+
 // Client 是 GitHub REST API 客户端。
 type Client struct {
 	baseURL        string
@@ -44,18 +55,24 @@ func (c *Client) WithBaseURL(baseURL string) *Client {
 }
 
 // SearchRepositories 调 GitHub Search API 获取候选仓库。
-func (c *Client) SearchRepositories(ctx context.Context, query string, perPage int) ([]Repository, error) {
-	if perPage <= 0 {
-		perPage = 30
+func (c *Client) SearchRepositories(ctx context.Context, options RepositorySearchOptions) ([]Repository, error) {
+	if options.PerPage <= 0 {
+		options.PerPage = 30
 	}
-	if perPage > 50 {
-		perPage = 50
+	if options.PerPage > 100 {
+		options.PerPage = 100
+	}
+	if strings.TrimSpace(options.Sort) == "" {
+		options.Sort = "stars"
+	}
+	if strings.TrimSpace(options.Order) == "" {
+		options.Order = "desc"
 	}
 	values := url.Values{}
-	values.Set("q", query)
-	values.Set("sort", "stars")
-	values.Set("order", "desc")
-	values.Set("per_page", strconv.Itoa(perPage))
+	values.Set("q", options.Query)
+	values.Set("sort", options.Sort)
+	values.Set("order", options.Order)
+	values.Set("per_page", strconv.Itoa(options.PerPage))
 
 	var response searchResponse
 	if err := c.get(ctx, "/search/repositories?"+values.Encode(), &response); err != nil {

@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,9 +89,51 @@ func TestServiceSyncPrunesStaleReposOnlyForFullMode(t *testing.T) {
 	}
 }
 
+func TestBuildSearchPlansMixesHeadActiveAndEmergingCandidates(t *testing.T) {
+	now := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	plans := buildSearchPlans(now, 500)
+	if len(plans) != 24 {
+		t.Fatalf("plan count = %d, want 8 seeds x 3 strategies", len(plans))
+	}
+
+	totalLimit := 0
+	kindCounts := map[string]int{}
+	for _, plan := range plans {
+		totalLimit += plan.Limit
+		kindCounts[plan.Kind]++
+		if plan.Limit <= 0 || plan.Limit > 100 {
+			t.Fatalf("invalid plan limit: %+v", plan)
+		}
+		switch plan.Kind {
+		case "head":
+			if plan.Sort != "stars" {
+				t.Fatalf("head sort = %q", plan.Sort)
+			}
+		case "active":
+			if plan.Sort != "updated" || !strings.Contains(plan.Query, "pushed:>=2026-06-18") {
+				t.Fatalf("invalid active plan: %+v", plan)
+			}
+		case "emerging":
+			if plan.Sort != "stars" || !strings.Contains(plan.Query, "created:>=2025-07-18") {
+				t.Fatalf("invalid emerging plan: %+v", plan)
+			}
+		default:
+			t.Fatalf("unexpected plan kind: %+v", plan)
+		}
+	}
+	if totalLimit != 500 {
+		t.Fatalf("total candidate budget = %d, want 500", totalLimit)
+	}
+	for _, kind := range []string{"head", "active", "emerging"} {
+		if kindCounts[kind] != 8 {
+			t.Fatalf("%s plan count = %d, want 8", kind, kindCounts[kind])
+		}
+	}
+}
+
 type fakeGitHubClient struct{}
 
-func (f *fakeGitHubClient) SearchRepositories(ctx context.Context, query string, perPage int) ([]github.Repository, error) {
+func (f *fakeGitHubClient) SearchRepositories(ctx context.Context, options github.RepositorySearchOptions) ([]github.Repository, error) {
 	return []github.Repository{{
 		ID:       100,
 		FullName: "openclaw/openclaw",

@@ -2,6 +2,8 @@
 
 Discovery 排序由后台任务预计算，HTTP 请求路径只读 SQLite 或内存缓存。
 
+候选池在排名前生成：默认全局预算为 500，按 8 个主题均分，再拆为头部 50%、近 30 天活跃 30%、近一年新兴 20%。三路结果按 GitHub repo id 去重；全量同步裁剪未命中项目，因此候选池会滚动变化但不会无限增长。
+
 ## 首期分数
 
 - `popularity_score`: stars、forks、release downloads、活跃度、质量门禁。
