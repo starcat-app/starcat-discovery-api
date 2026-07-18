@@ -15,7 +15,10 @@ import (
 	"github.com/dong4j/starcat-discovery-api/internal/tokenpool"
 )
 
-const defaultBaseURL = "https://api.github.com"
+const (
+	defaultBaseURL           = "https://api.github.com"
+	maxTokenAvailabilityWait = 90 * time.Second
+)
 
 // RepositorySearchOptions 描述一次候选仓库搜索。
 //
@@ -34,6 +37,7 @@ type Client struct {
 	httpClient     *http.Client
 	tokens         *tokenpool.Pool
 	rateLimitFloor int
+	maxTokenWait   time.Duration
 }
 
 // NewClient 创建 GitHub client。
@@ -45,6 +49,7 @@ func NewClient(tokens *tokenpool.Pool, rateLimitFloor int) *Client {
 		},
 		tokens:         tokens,
 		rateLimitFloor: rateLimitFloor,
+		maxTokenWait:   maxTokenAvailabilityWait,
 	}
 }
 
@@ -111,14 +116,15 @@ func (c *Client) get(ctx context.Context, path string, out interface{}) error {
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := 0; attempt < maxAttempts; {
 		token := c.tokens.PickBest()
 		if token == nil {
-			if earliest := c.tokens.EarliestAvailable(); !earliest.IsZero() {
-				return fmt.Errorf("no GitHub token available until %s", earliest.Format(time.RFC3339))
+			if err := c.waitForAvailableToken(ctx); err != nil {
+				return err
 			}
-			return fmt.Errorf("no GitHub token available")
+			continue
 		}
+		attempt++
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 		if err != nil {
@@ -170,6 +176,34 @@ func (c *Client) get(ctx context.Context, path string, out interface{}) error {
 		return lastErr
 	}
 	return fmt.Errorf("github api %s failed: no token attempts completed", path)
+}
+
+// waitForAvailableToken 等待 Search API 的分钟级额度恢复。
+//
+// 候选发现会连续执行多路 Search；当所有 token 都刚好低于保护阈值时，直接失败会让整轮
+// 同步丢弃。等待严格限制在 90 秒内并服从请求 context，避免 Core API 的小时级 reset
+// 把管理请求和定时任务长期挂住。
+func (c *Client) waitForAvailableToken(ctx context.Context) error {
+	earliest := c.tokens.EarliestAvailable()
+	if earliest.IsZero() {
+		return fmt.Errorf("no GitHub token available")
+	}
+	wait := time.Until(earliest)
+	if wait <= 0 {
+		return nil
+	}
+	if wait > c.maxTokenWait {
+		return fmt.Errorf("no GitHub token available until %s", earliest.Format(time.RFC3339))
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *Client) disableBelowFloor(token *tokenpool.TokenState, resp *http.Response) bool {

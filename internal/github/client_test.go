@@ -100,6 +100,38 @@ func TestClientKeepsSuccessWhenRemainingBelowFloorAndSkipsTokenLater(t *testing.
 	}
 }
 
+func TestClientWaitsForTemporaryTokenCooldown(t *testing.T) {
+	tokens := tokenpool.New([]string{"github_pat_token_one_123456"})
+	token := tokens.PickBest()
+	tokens.DisableUntil(token, time.Now().Add(50*time.Millisecond), "test cooldown")
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("X-RateLimit-Remaining", "4000")
+		_ = json.NewEncoder(w).Encode(searchResponse{Items: []Repository{{ID: 1, FullName: "acme/recovered"}}})
+	}))
+	defer server.Close()
+
+	client := NewClient(tokens, 50).WithBaseURL(server.URL)
+	client.httpClient = server.Client()
+	client.maxTokenWait = time.Second
+
+	repos, err := client.SearchRepositories(t.Context(), RepositorySearchOptions{
+		Query:   "topic:ai",
+		PerPage: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].FullName != "acme/recovered" {
+		t.Fatalf("unexpected repos after cooldown: %#v", repos)
+	}
+	if requestCount != 1 {
+		t.Fatalf("want one GitHub call after cooldown, got %d", requestCount)
+	}
+}
+
 func TestClientSearchRepositoriesUsesCandidateStrategyOptions(t *testing.T) {
 	tokens := tokenpool.New([]string{"github_pat_token_one_123456"})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
