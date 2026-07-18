@@ -10,7 +10,7 @@
 | `SYNC_ENABLED` | 否 | 是否启动定时同步 |
 | `SYNC_CRON` | 否 | 轻同步 cron |
 | `FULL_SYNC_CRON` | 否 | 全量同步 cron |
-| `CACHE_TTL_SECONDS` | 否 | `/discovery/bulk` 进程内缓存 TTL |
+| `CACHE_TTL_SECONDS` | 否 | `/discovery/bulk` 进程内缓存 TTL，默认 `10800` 秒（3 小时） |
 | `MAX_SEARCH_CALLS_PER_MINUTE` | 否 | GitHub Search API 保护阈值 |
 | `RATE_LIMIT_FLOOR` | 否 | token 剩余额度低于该值时停止非必要请求 |
 | `FEED_TARGET_SIZE` | 否 | 每轮 GitHub Search 的全局候选预算，默认 `500`，服务端最高限制为 `1600` |

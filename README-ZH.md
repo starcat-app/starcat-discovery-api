@@ -88,7 +88,7 @@ go run ./cmd/server/
 | `SYNC_ENABLED` | 否 | `true` | 是否启动定时同步 |
 | `SYNC_CRON` | 否 | `17 */3 * * *` | 轻同步 cron |
 | `FULL_SYNC_CRON` | 否 | `23 2 * * *` | 全量同步 cron |
-| `CACHE_TTL_SECONDS` | 否 | `900` | `/discovery/bulk` 进程内缓存 TTL |
+| `CACHE_TTL_SECONDS` | 否 | `10800` | `/discovery/bulk` 进程内缓存 TTL |
 | `FEED_TARGET_SIZE` | 否 | `500` | 每轮 GitHub Search 的全局候选预算，服务端最高限制为 `1600` |
 
 ## API
@@ -185,7 +185,7 @@ sequenceDiagram
 | 热门 | `category_rankings(category = "most-popular")` | 非 archived、非 fork，且满足 `stars >= 1000` 或 `popularity_score >= 0.65` | `popularity_score DESC`，按 bucket 预计算 rank |
 | 新发布 | `category_rankings(category = "new-releases")` | 非 archived、非 fork；存在最近 180 天内的 stable release；该 release 不是 draft / prerelease，且 assets 非空 | `latest_release_at DESC`，再按 `release_score DESC`、stars、repo id 兜底 |
 
-`/api/v1/discovery/bulk` 返回完整公开 catalog 和 summary，供 Starcat 客户端本地优先缓存后在本地完成筛选、排序和分页。后端 bulk 进程内缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 900 秒；每次同步成功后会主动失效该缓存，下一次 `/bulk` 请求会重新从 SQLite 构建响应。
+`/api/v1/discovery/bulk` 返回完整公开 catalog 和 summary，供 Starcat 客户端本地优先缓存后在本地完成筛选、排序和分页。后端 bulk 进程内缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 10800 秒（3 小时），与默认轻量同步周期和客户端 freshness 窗口一致；每次同步成功后会主动失效该缓存，下一次 `/bulk` 请求会重新从 SQLite 构建响应。
 
 ## 部署
 

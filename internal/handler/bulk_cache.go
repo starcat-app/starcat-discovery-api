@@ -30,12 +30,12 @@ type bulkCacheEntry struct {
 	builtAt      time.Time
 }
 
-const defaultBulkCacheTTL = 15 * time.Minute
+const defaultBulkCacheTTL = 3 * time.Hour
 
 // NewBulkCache 创建空 bulk cache。
 //
-// ttl 来自 CACHE_TTL_SECONDS。这里不再硬编码 6 小时，是为了让运维配置和实际行为一致；
-// 非法值退回 15 分钟，避免缓存永久失效或意外长期持有旧 catalog。
+// ttl 来自 CACHE_TTL_SECONDS；非法值退回 3 小时，与默认增量同步周期及客户端本地
+// freshness 窗口一致。同步完成仍会主动失效，因此 3 小时是兜底上限，不会遮蔽新 catalog。
 func NewBulkCache(ttl time.Duration) *BulkCache {
 	if ttl <= 0 {
 		ttl = defaultBulkCacheTTL

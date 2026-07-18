@@ -88,7 +88,7 @@ The default port is `5006`.
 | `SYNC_ENABLED` | No | `true` | Enables scheduled synchronization |
 | `SYNC_CRON` | No | `17 */3 * * *` | Light sync cron schedule |
 | `FULL_SYNC_CRON` | No | `23 2 * * *` | Full sync cron schedule |
-| `CACHE_TTL_SECONDS` | No | `900` | In-memory cache TTL for `/discovery/bulk` |
+| `CACHE_TTL_SECONDS` | No | `10800` | In-memory cache TTL for `/discovery/bulk` |
 | `FEED_TARGET_SIZE` | No | `500` | Global GitHub Search candidate budget per sync, capped by the service at `1600` |
 
 ## API
@@ -185,7 +185,7 @@ Candidate discovery still covers the eight `llm`, `machine-learning`, `privacy`,
 | Popular | `category_rankings(category = "most-popular")` | Excludes archived repositories and forks; requires `stars >= 1000` or `popularity_score >= 0.65` | `popularity_score DESC`, with rank precomputed per bucket |
 | New Releases | `category_rankings(category = "new-releases")` | Excludes archived repositories and forks; requires a stable release from the last 180 days that is neither a draft nor a prerelease and has at least one asset | `latest_release_at DESC`, then `release_score DESC`, stars, and repository ID as tie-breakers |
 
-`/api/v1/discovery/bulk` returns the complete public catalog and summary. The Starcat client stores this data in its local-first cache and performs filtering, sorting, and pagination locally. `CACHE_TTL_SECONDS` controls the server's in-memory bulk cache TTL, which defaults to 900 seconds. Each successful sync invalidates the cache, so the next `/bulk` request rebuilds the response from SQLite.
+`/api/v1/discovery/bulk` returns the complete public catalog and summary. The Starcat client stores this data in its local-first cache and performs filtering, sorting, and pagination locally. `CACHE_TTL_SECONDS` controls the server's in-memory bulk cache TTL, which defaults to 10800 seconds (3 hours), matching the default incremental sync cadence and the client's freshness window. Each successful sync invalidates the cache, so the next `/bulk` request rebuilds the response from SQLite.
 
 ## Deployment
 

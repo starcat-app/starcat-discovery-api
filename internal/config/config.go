@@ -16,7 +16,7 @@ const (
 	defaultSyncEnabled             = true
 	defaultSyncCron                = "17 */3 * * *"
 	defaultFullSyncCron            = "23 2 * * *"
-	defaultCacheTTLSeconds         = 900
+	defaultCacheTTLSeconds         = 10800
 	defaultMaxSearchCallsPerMinute = 28
 	defaultRateLimitFloor          = 50
 	defaultFeedTargetSize          = 500

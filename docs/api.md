@@ -173,7 +173,7 @@ Starcat 本地优先缓存用的全量公开 catalog 快照。该接口不接收
 
 说明:
 
-- 服务端内存缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 900 秒（15 分钟）；GitHub 同步成功后主动失效。
+- 服务端内存缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 10800 秒（3 小时）；GitHub 同步成功后主动失效。
 - bulk 读取只查 SQLite，不触发 GitHub。
 - `categories` 和 `category_ranks` 来自 `category_rankings(bucket='__all__')`，Starcat 客户端按它们做热门 / 新发布本地过滤。
 - 客户端仍可使用分页接口作为诊断和降级路径，但探索主链路应优先 bulk 本地缓存。
