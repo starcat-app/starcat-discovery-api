@@ -53,46 +53,46 @@ brew install --cask starcat
 > Starcat provides hosted defaults for normal users. This API is open source so advanced users can inspect it, run it locally, or deploy their own instance.
 <!-- starcat-promo:end -->
 
-`starcat-discovery-api` 为 Starcat 的「探索」入口提供发现流、热门榜单、新发布榜单，并保留新版趋势候选诊断接口。
+`starcat-discovery-api` provides the discovery feed, popular repository rankings, and new-release rankings for Starcat's Discovery section. It also retains a diagnostic endpoint for the new trending candidate pipeline.
 
-本服务独立于 `starcat-trending-api`。旧趋势链路保持不变，新服务只负责 Discovery 相关能力。
+This service is independent of `starcat-trending-api`. The existing trending pipeline remains unchanged, while this service handles Discovery features only.
 
-## 特性
+## Features
 
-- Go 标准库 `net/http`
-- 统一 envelope 响应
-- 普通 API Key 与 Admin API Key 分离
-- SQLite 持久化，Fly.io volume 保存数据
-- GitHub PAT 池驱动 Search / repo / release ingest
-- 开源友好的 README、LICENSE、CONTRIBUTING、SECURITY、Dockerfile、Fly.io 配置
+- Go standard library `net/http`
+- Consistent envelope responses
+- Separate standard and admin API keys
+- SQLite persistence backed by a Fly.io volume
+- GitHub PAT pool for Search, repository, and release ingestion
+- Open-source project files: README, LICENSE, CONTRIBUTING, SECURITY, Dockerfile, and Fly.io configuration
 
-## 快速开始
+## Quick Start
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入 API_KEYS、ADMIN_API_KEYS、GITHUB_TOKENS
+# Edit .env and set API_KEYS, ADMIN_API_KEYS, and GITHUB_TOKENS
 go run ./cmd/server/
 ```
 
-默认端口为 `5006`。
+The default port is `5006`.
 
-## 环境变量
+## Environment Variables
 
-| 变量 | 必填 | 默认值 | 说明 |
+| Variable | Required | Default | Description |
 |---|---:|---|---|
-| `PORT` | 否 | `5006` | HTTP 端口 |
-| `STORE_FILE` | 否 | `./discovery.db` | SQLite 文件路径 |
-| `API_KEYS` | 是 | 无 | Starcat 客户端读取接口 key |
-| `ADMIN_API_KEYS` | 是 | 无 | `/internal/*` 管理接口 key |
-| `GITHUB_TOKENS` | 是 | 无 | GitHub PAT 池，逗号分隔 |
-| `SYNC_ENABLED` | 否 | `true` | 是否启动定时同步 |
-| `SYNC_CRON` | 否 | `17 */3 * * *` | 轻同步 cron |
-| `FULL_SYNC_CRON` | 否 | `23 2 * * *` | 全量同步 cron |
-| `CACHE_TTL_SECONDS` | 否 | `900` | `/discovery/bulk` 进程内缓存 TTL |
+| `PORT` | No | `5006` | HTTP port |
+| `STORE_FILE` | No | `./discovery.db` | SQLite file path |
+| `API_KEYS` | Yes | None | Keys for Starcat client read endpoints |
+| `ADMIN_API_KEYS` | Yes | None | Keys for `/internal/*` admin endpoints |
+| `GITHUB_TOKENS` | Yes | None | Comma-separated GitHub PAT pool |
+| `SYNC_ENABLED` | No | `true` | Enables scheduled synchronization |
+| `SYNC_CRON` | No | `17 */3 * * *` | Light sync cron schedule |
+| `FULL_SYNC_CRON` | No | `23 2 * * *` | Full sync cron schedule |
+| `CACHE_TTL_SECONDS` | No | `900` | In-memory cache TTL for `/discovery/bulk` |
 
 ## API
 
-所有 `/api/v1/*` 接口需要 `Authorization: Bearer <API_KEYS>`。
+All `/api/v1/*` endpoints require `Authorization: Bearer <API_KEYS>`.
 
 ```text
 GET /healthz
@@ -109,11 +109,11 @@ GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
 ```
 
-发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势候选只保留在 `/internal/discovery/trending-candidates`，需要 Admin API Key，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
+The discovery, popular, and new-release endpoints read precomputed results from SQLite. `/discovery/bulk` provides the complete public catalog snapshot required by Starcat's local-first cache. The admin sync endpoint triggers GitHub ingestion and rebuilds the rankings. Trending candidates remain available only through `/internal/discovery/trending-candidates`, which requires an Admin API Key. They are excluded from summary, bulk, and the Starcat UI. The client continues to use the existing `starcat-trending-api`.
 
-## 同步与分类逻辑
+## Synchronization and Classification
 
-### 轻量同步
+### Light Sync
 
 ```mermaid
 sequenceDiagram
@@ -123,11 +123,11 @@ sequenceDiagram
     participant SQLite as SQLite
     participant BulkCache as Bulk Cache
 
-    Scheduler->>Ingest: 按 SYNC_CRON 触发
+    Scheduler->>Ingest: Trigger on SYNC_CRON
     Ingest->>SQLite: StartSyncRun(mode)
-    loop 每个 default seed
+    loop Each default seed
         Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
-        loop 每个去重候选 repo
+        loop Each deduplicated candidate repo
             Ingest->>GitHub: GetRepository(full_name)
             Ingest->>GitHub: ListReleases(full_name, 5)
             Ingest->>SQLite: UpsertRepo(repo + scores + topics + platforms)
@@ -141,9 +141,9 @@ sequenceDiagram
     Ingest->>BulkCache: Invalidate()
 ```
 
-轻量同步由 `SYNC_CRON` 控制，默认 `17 */3 * * *`，即每 3 小时一次。它从 GitHub Search 拉候选仓库，再为每个候选仓库拉 repo 详情和最近 5 个 releases，写入或更新 `repos`、`repo_releases`、`repo_topic_codes`、`repo_platform_codes`、`repo_daily_snapshots`、`category_rankings`、`topic_rankings` 和 `sync_runs`。轻量同步只做 upsert 和排名重建，不删除这轮没命中的旧 repo。
+`SYNC_CRON` controls the light sync. Its default schedule, `17 */3 * * *`, runs every three hours. It fetches candidate repositories from GitHub Search, then fetches repository details and the five most recent releases for each candidate. It inserts or updates `repos`, `repo_releases`, `repo_topic_codes`, `repo_platform_codes`, `repo_daily_snapshots`, `category_rankings`, `topic_rankings`, and `sync_runs`. A light sync only performs upserts and rebuilds rankings; it does not delete existing repositories that are absent from the current results.
 
-### 全量同步
+### Full Sync
 
 ```mermaid
 sequenceDiagram
@@ -153,11 +153,11 @@ sequenceDiagram
     participant SQLite as SQLite
     participant BulkCache as Bulk Cache
 
-    Scheduler->>Ingest: 按 FULL_SYNC_CRON 触发
+    Scheduler->>Ingest: Trigger on FULL_SYNC_CRON
     Ingest->>SQLite: StartSyncRun(mode)
-    loop 每个 default seed
+    loop Each default seed
         Ingest->>GitHub: SearchRepositories(seed.query, searchLimit)
-        loop 每个去重候选 repo
+        loop Each deduplicated candidate repo
             Ingest->>GitHub: GetRepository(full_name)
             Ingest->>GitHub: ListReleases(full_name, 5)
             Ingest->>SQLite: UpsertRepo(repo + scores + topics + platforms)
@@ -172,21 +172,21 @@ sequenceDiagram
     Ingest->>BulkCache: Invalidate()
 ```
 
-全量同步由 `FULL_SYNC_CRON` 控制，默认 `23 2 * * *`，即每天 UTC 02:23 一次。它和轻量同步拉取同样的候选 repo、repo 详情和 release 数据，但会额外执行 `PruneReposNotIn(candidateIDs)`，删除本轮 GitHub Search 候选集之外的旧 repo。因此全量同步不是让数据无限增长，而是把 catalog 收敛到当前 seed 命中的候选集合。
+`FULL_SYNC_CRON` controls the full sync. Its default schedule, `23 2 * * *`, runs daily at 02:23 UTC. It fetches the same candidate repositories, repository details, and release data as a light sync. It also runs `PruneReposNotIn(candidateIDs)` to delete existing repositories outside the current GitHub Search candidate set. This keeps the catalog aligned with repositories matched by the current seeds instead of allowing unbounded growth.
 
-当前候选发现来自 8 条固定 GitHub Search seed：`topic:llm stars:>100 archived:false`、`topic:machine-learning stars:>500 archived:false`、`topic:privacy stars:>100 archived:false`、`topic:networking stars:>100 archived:false`、`topic:media stars:>100 archived:false`、`topic:social stars:>100 archived:false`、`topic:rss stars:>100 archived:false`、`topic:cli stars:>100 archived:false`。每条 seed 最多取 `searchLimit` 个结果，`NewService` 会把该值限制到最高 50；所以理论候选上限约为 8 × 50，去重后通常接近 400。数据量长期稳定在这个范围是预期行为。
+Candidate discovery currently uses eight fixed GitHub Search seeds: `topic:llm stars:>100 archived:false`, `topic:machine-learning stars:>500 archived:false`, `topic:privacy stars:>100 archived:false`, `topic:networking stars:>100 archived:false`, `topic:media stars:>100 archived:false`, `topic:social stars:>100 archived:false`, `topic:rss stars:>100 archived:false`, and `topic:cli stars:>100 archived:false`. Each seed returns at most `searchLimit` results, and `NewService` caps that value at 50. The theoretical maximum is therefore about 8 × 50 candidates, usually close to 400 after deduplication. The data set is expected to remain near this size over time.
 
-### 发现 / 热门 / 新发布
+### Discovery, Popular, and New Releases
 
-| 分类 | 数据来源 | 规则 | 默认排序 |
+| Category | Data Source | Rules | Default Sort |
 |---|---|---|---|
-| 发现 | `repos` 全量 catalog，并结合 `topic_rankings` 提供 topic / platform 预计算排名 | 仓库来自同步 seed 命中的候选集；同步时按仓库元数据和 seed topic 生成 topics，按仓库属性和 releases 推断 platforms；接口可按 topic、platform、language 等条件筛选 | `discovery_score DESC`，同分时按 stars 和 repo id 兜底 |
-| 热门 | `category_rankings(category = "most-popular")` | 非 archived、非 fork，且满足 `stars >= 1000` 或 `popularity_score >= 0.65` | `popularity_score DESC`，按 bucket 预计算 rank |
-| 新发布 | `category_rankings(category = "new-releases")` | 非 archived、非 fork；存在最近 180 天内的 stable release；该 release 不是 draft / prerelease，且 assets 非空 | `latest_release_at DESC`，再按 `release_score DESC`、stars、repo id 兜底 |
+| Discovery | The complete `repos` catalog, with precomputed topic and platform rankings from `topic_rankings` | Repositories come from the candidate set matched by sync seeds. During synchronization, topics are generated from repository metadata and seed topics, while platforms are inferred from repository attributes and releases. The endpoint supports filters such as topic, platform, and language. | `discovery_score DESC`, then stars and repository ID as tie-breakers |
+| Popular | `category_rankings(category = "most-popular")` | Excludes archived repositories and forks; requires `stars >= 1000` or `popularity_score >= 0.65` | `popularity_score DESC`, with rank precomputed per bucket |
+| New Releases | `category_rankings(category = "new-releases")` | Excludes archived repositories and forks; requires a stable release from the last 180 days that is neither a draft nor a prerelease and has at least one asset | `latest_release_at DESC`, then `release_score DESC`, stars, and repository ID as tie-breakers |
 
-`/api/v1/discovery/bulk` 返回完整公开 catalog 和 summary，供 Starcat 客户端本地优先缓存后在本地完成筛选、排序和分页。后端 bulk 进程内缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 900 秒；每次同步成功后会主动失效该缓存，下一次 `/bulk` 请求会重新从 SQLite 构建响应。
+`/api/v1/discovery/bulk` returns the complete public catalog and summary. The Starcat client stores this data in its local-first cache and performs filtering, sorting, and pagination locally. `CACHE_TTL_SECONDS` controls the server's in-memory bulk cache TTL, which defaults to 900 seconds. Each successful sync invalidates the cache, so the next `/bulk` request rebuilds the response from SQLite.
 
-## 部署
+## Deployment
 
 ```bash
 fly secrets set \
@@ -199,4 +199,4 @@ fly secrets set \
 fly deploy -a starcat-discovery-api
 ```
 
-更多说明见 `docs/DEPLOY_FLY.md`。
+See `docs/DEPLOY_FLY.md` for more information.
