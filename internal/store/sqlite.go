@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/dong4j/starcat-discovery-api/internal/model"
+	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
 
 // SQLiteStore 是 discovery 服务的持久化入口。

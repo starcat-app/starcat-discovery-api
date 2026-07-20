@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dong4j/starcat-discovery-api/internal/github"
+	"github.com/starcat-app/starcat-discovery-api/internal/github"
 )
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)

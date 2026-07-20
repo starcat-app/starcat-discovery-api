@@ -42,12 +42,12 @@ brew install --cask starcat
 
 **Starcat ecosystem:**
 
-- [starcat-sharing-api](https://github.com/dong4j/starcat-sharing-api)
-- [starcat-trending-api](https://github.com/dong4j/starcat-trending-api)
-- [starcat-weekly-api](https://github.com/dong4j/starcat-weekly-api)
-- [starcat-wiki-api](https://github.com/dong4j/starcat-wiki-api)
-- [starcat-recommend-api](https://github.com/dong4j/starcat-recommend-api)
-- [starcat-discovery-api](https://github.com/dong4j/starcat-discovery-api)
+- [starcat-sharing-api](https://github.com/starcat-app/starcat-sharing-api)
+- [starcat-trending-api](https://github.com/starcat-app/starcat-trending-api)
+- [starcat-weekly-api](https://github.com/starcat-app/starcat-weekly-api)
+- [starcat-wiki-api](https://github.com/starcat-app/starcat-wiki-api)
+- [starcat-recommend-api](https://github.com/starcat-app/starcat-recommend-api)
+- [starcat-discovery-api](https://github.com/starcat-app/starcat-discovery-api)
 - [starcat-license-api](https://github.com/dong4j/starcat-license-api)
 
 > Starcat provides hosted defaults for normal users. This API is open source so advanced users can inspect it, run it locally, or deploy their own instance.

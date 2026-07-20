@@ -15,15 +15,15 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/dong4j/starcat-discovery-api/internal/config"
-	"github.com/dong4j/starcat-discovery-api/internal/github"
-	"github.com/dong4j/starcat-discovery-api/internal/handler"
-	"github.com/dong4j/starcat-discovery-api/internal/ingest"
-	"github.com/dong4j/starcat-discovery-api/internal/middleware"
-	"github.com/dong4j/starcat-discovery-api/internal/scheduler"
-	"github.com/dong4j/starcat-discovery-api/internal/store"
-	"github.com/dong4j/starcat-discovery-api/internal/tokenpool"
-	"github.com/dong4j/starcat-discovery-api/internal/version"
+	"github.com/starcat-app/starcat-discovery-api/internal/config"
+	"github.com/starcat-app/starcat-discovery-api/internal/github"
+	"github.com/starcat-app/starcat-discovery-api/internal/handler"
+	"github.com/starcat-app/starcat-discovery-api/internal/ingest"
+	"github.com/starcat-app/starcat-discovery-api/internal/middleware"
+	"github.com/starcat-app/starcat-discovery-api/internal/scheduler"
+	"github.com/starcat-app/starcat-discovery-api/internal/store"
+	"github.com/starcat-app/starcat-discovery-api/internal/tokenpool"
+	"github.com/starcat-app/starcat-discovery-api/internal/version"
 )
 
 func main() {

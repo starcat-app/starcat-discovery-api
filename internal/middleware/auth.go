@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/dong4j/starcat-discovery-api/internal/model"
+	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
 
 // BearerAuth 持有 API Key 白名单，验证 Authorization: Bearer <token>。

@@ -3,7 +3,7 @@ package ingest
 import (
 	"testing"
 
-	"github.com/dong4j/starcat-discovery-api/internal/github"
+	"github.com/starcat-app/starcat-discovery-api/internal/github"
 )
 
 func TestClassifyTopics(t *testing.T) {

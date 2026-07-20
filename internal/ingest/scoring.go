@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/dong4j/starcat-discovery-api/internal/github"
+	"github.com/starcat-app/starcat-discovery-api/internal/github"
 )
 
 // Scores 是写入 repos 表的预计算分数。

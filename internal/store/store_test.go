@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dong4j/starcat-discovery-api/internal/model"
+	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
 
 func TestSQLiteStoreUpsertAndListScoredRepos(t *testing.T) {

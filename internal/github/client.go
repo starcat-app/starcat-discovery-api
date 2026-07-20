@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dong4j/starcat-discovery-api/internal/tokenpool"
+	"github.com/starcat-app/starcat-discovery-api/internal/tokenpool"
 )
 
 const (

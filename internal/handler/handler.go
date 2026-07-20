@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/dong4j/starcat-discovery-api/internal/model"
+	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
 
 // WriteJSON 将任意 data 包装成 envelope 后输出。

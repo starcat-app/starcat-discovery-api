@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/dong4j/starcat-discovery-api/internal/model"
+	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
 
 // SyncService 是 admin handler 依赖的同步服务接口。

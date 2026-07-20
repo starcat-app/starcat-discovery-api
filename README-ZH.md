@@ -42,12 +42,12 @@ brew install --cask starcat
 
 **Starcat 生态项目：**
 
-- [starcat-sharing-api](https://github.com/dong4j/starcat-sharing-api)
-- [starcat-trending-api](https://github.com/dong4j/starcat-trending-api)
-- [starcat-weekly-api](https://github.com/dong4j/starcat-weekly-api)
-- [starcat-wiki-api](https://github.com/dong4j/starcat-wiki-api)
-- [starcat-recommend-api](https://github.com/dong4j/starcat-recommend-api)
-- [starcat-discovery-api](https://github.com/dong4j/starcat-discovery-api)
+- [starcat-sharing-api](https://github.com/starcat-app/starcat-sharing-api)
+- [starcat-trending-api](https://github.com/starcat-app/starcat-trending-api)
+- [starcat-weekly-api](https://github.com/starcat-app/starcat-weekly-api)
+- [starcat-wiki-api](https://github.com/starcat-app/starcat-wiki-api)
+- [starcat-recommend-api](https://github.com/starcat-app/starcat-recommend-api)
+- [starcat-discovery-api](https://github.com/starcat-app/starcat-discovery-api)
 - [starcat-license-api](https://github.com/dong4j/starcat-license-api)
 
 > Starcat 为普通用户提供默认托管服务。这个 API 开源出来，是为了让进阶用户可以审查实现、本地运行，或部署自己的实例。

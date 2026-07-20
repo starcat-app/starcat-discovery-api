@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dong4j/starcat-discovery-api/internal/github"
-	"github.com/dong4j/starcat-discovery-api/internal/model"
-	"github.com/dong4j/starcat-discovery-api/internal/store"
+	"github.com/starcat-app/starcat-discovery-api/internal/github"
+	"github.com/starcat-app/starcat-discovery-api/internal/model"
+	"github.com/starcat-app/starcat-discovery-api/internal/store"
 )
 
 func TestServiceSync(t *testing.T) {
