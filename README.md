@@ -37,7 +37,7 @@ brew install --cask starcat
 - Download: https://starcat.ink/downloads/Starcat-1.1.0-arm64.dmg
 - Public support and release notes: https://github.com/starcat-app/starcat-pro
 - Homebrew tap: https://github.com/dong4j/homebrew-starcat
-- Browser plugins: [Chrome](https://github.com/dong4j/starcat-chrome-plugin) / [Safari](https://github.com/dong4j/starcat-safari-plugin)
+- Browser plugins: [Chrome](https://github.com/dong4j/starcat-chrome-plugin) / [Safari](https://github.com/starcat-app/starcat-safari-plugin)
 - Localization: https://github.com/starcat-app/starcat-localization
 
 **Starcat ecosystem:**
