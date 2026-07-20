@@ -48,7 +48,6 @@ brew install --cask starcat
 - [starcat-wiki-api](https://github.com/starcat-app/starcat-wiki-api)
 - [starcat-recommend-api](https://github.com/starcat-app/starcat-recommend-api)
 - [starcat-discovery-api](https://github.com/starcat-app/starcat-discovery-api)
-- [starcat-license-api](https://github.com/dong4j/starcat-license-api)
 
 > Starcat provides hosted defaults for normal users. This API is open source so advanced users can inspect it, run it locally, or deploy their own instance.
 <!-- starcat-promo:end -->

@@ -48,7 +48,6 @@ brew install --cask starcat
 - [starcat-wiki-api](https://github.com/starcat-app/starcat-wiki-api)
 - [starcat-recommend-api](https://github.com/starcat-app/starcat-recommend-api)
 - [starcat-discovery-api](https://github.com/starcat-app/starcat-discovery-api)
-- [starcat-license-api](https://github.com/dong4j/starcat-license-api)
 
 > Starcat 为普通用户提供默认托管服务。这个 API 开源出来，是为了让进阶用户可以审查实现、本地运行，或部署自己的实例。
 <!-- starcat-promo:end -->
