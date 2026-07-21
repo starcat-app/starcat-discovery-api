@@ -1,9 +1,8 @@
-// Package version 暴露构建版本信息。
+// Package version 暴露服务标识和构建时注入的版本号。
 package version
 
-const (
-	// Service 是客户端 ping 和日志中使用的服务名。
-	Service = "discovery"
-	// Version 是当前服务版本。发布时由 changelog 同步维护。
-	Version = "0.1.0"
-)
+const Service = "discovery"
+
+// Version 必须保持为变量，发布流水线通过 go build -ldflags -X 注入 Git tag 对应版本。
+// 本地直接运行时保留开发版本，避免把某次历史发布号误报为当前构建版本。
+var Version = "0.0.0-dev"

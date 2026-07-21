@@ -110,6 +110,12 @@ GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
 ```
 
+`GET /api/v1/ping` returns the authenticated service identity and the build version injected from the release tag:
+
+```json
+{"schema_version":1,"data":{"service":"discovery","version":"1.2.3","ok":true}}
+```
+
 The discovery, popular, and new-release endpoints read precomputed results from SQLite. `/discovery/bulk` provides the complete public catalog snapshot required by Starcat's local-first cache. The admin sync endpoint triggers GitHub ingestion and rebuilds the rankings. Trending candidates remain available only through `/internal/discovery/trending-candidates`, which requires an Admin API Key. They are excluded from summary, bulk, and the Starcat UI. The client continues to use the existing `starcat-trending-api`.
 
 ## Synchronization and Classification

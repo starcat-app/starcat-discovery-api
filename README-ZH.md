@@ -110,6 +110,12 @@ GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
 ```
 
+`GET /api/v1/ping` 返回鉴权后的服务标识，以及由发布 tag 注入的构建版本：
+
+```json
+{"schema_version":1,"data":{"service":"discovery","version":"1.2.3","ok":true}}
+```
+
 发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势候选只保留在 `/internal/discovery/trending-candidates`，需要 Admin API Key，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
 
 ## 同步与分类逻辑

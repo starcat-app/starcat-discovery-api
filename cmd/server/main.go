@@ -60,7 +60,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
-	mux.Handle("GET /api/v1/ping", apiAuth.Wrap(handler.HandlePingV1(version.Service)))
+	mux.Handle("GET /api/v1/ping", apiAuth.Wrap(handler.HandlePingV1(version.Service, version.Version)))
 	mux.Handle("GET /api/v1/discovery/feed", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleFeed)))
 	mux.Handle("GET /api/v1/discovery/categories/most-popular", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleMostPopular)))
 	mux.Handle("GET /api/v1/discovery/categories/new-releases", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleNewReleases)))
