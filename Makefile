@@ -47,9 +47,10 @@ fmt: ## 格式化代码
 
 .PHONY: fmt-check
 fmt-check: ## 检查代码格式 (CI 用)
-	@if [ "$$($(GOFMT) $(PKG) | wc -l)" -gt 0 ]; then \
+	@unformatted="$$(find . -name '*.go' -not -path './vendor/*' -print0 | xargs -0 $(GOFMT))"; \
+	if [ -n "$$unformatted" ]; then \
 		echo "✗ 以下文件未格式化:"; \
-		$(GOFMT) $(PKG); \
+		echo "$$unformatted"; \
 		exit 1; \
 	fi
 	@echo "✓ 格式检查通过"
