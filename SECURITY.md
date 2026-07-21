@@ -6,7 +6,7 @@
 
 ## Reporting a Vulnerability
 
-请通过私有渠道联系维护者，不要在公开 issue 中贴出 API key、GitHub PAT、数据库内容或线上日志。
+请通过 [GitHub Security Advisories](https://github.com/starcat-app/starcat-discovery-api/security/advisories/new) 私下报告，不要在公开 issue 中贴出 API key、GitHub PAT、数据库内容或线上日志。
 
 ## Runtime Secrets
 
