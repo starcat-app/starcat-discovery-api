@@ -33,14 +33,15 @@ brew install --cask starcat
 
 **相关链接：**
 
-- 官网: https://starcat.ink
-- 下载: https://starcat.ink/downloads/Starcat-1.1.0-arm64.dmg
+- 官网与下载: https://starcat.ink
 - 公开支持与发布说明: https://github.com/starcat-app/starcat-pro
-- Homebrew tap: https://github.com/starcat-app/homebrew-starcat
+- Starcat App Homebrew tap: https://github.com/starcat-app/homebrew-starcat
+- CLI / MCP: [starcat-cli](https://github.com/starcat-app/starcat-cli) / [Homebrew tap](https://github.com/starcat-app/homebrew-starcat-cli)
+- AI Agent Skill: https://github.com/starcat-app/starcat-skill
 - 浏览器插件: [Chrome](https://github.com/starcat-app/starcat-chrome-plugin) / [Safari](https://github.com/starcat-app/starcat-safari-plugin)
 - 本地化: https://github.com/starcat-app/starcat-localization
 
-**Starcat 生态项目：**
+**可自部署支撑 API：**
 
 - [starcat-sharing-api](https://github.com/starcat-app/starcat-sharing-api)
 - [starcat-trending-api](https://github.com/starcat-app/starcat-trending-api)

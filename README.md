@@ -33,14 +33,15 @@ brew install --cask starcat
 
 **Useful links:**
 
-- Home: https://starcat.ink
-- Download: https://starcat.ink/downloads/Starcat-1.1.0-arm64.dmg
+- Home and downloads: https://starcat.ink
 - Public support and release notes: https://github.com/starcat-app/starcat-pro
-- Homebrew tap: https://github.com/starcat-app/homebrew-starcat
+- Starcat App Homebrew tap: https://github.com/starcat-app/homebrew-starcat
+- CLI / MCP: [starcat-cli](https://github.com/starcat-app/starcat-cli) / [Homebrew tap](https://github.com/starcat-app/homebrew-starcat-cli)
+- AI Agent Skill: https://github.com/starcat-app/starcat-skill
 - Browser plugins: [Chrome](https://github.com/starcat-app/starcat-chrome-plugin) / [Safari](https://github.com/starcat-app/starcat-safari-plugin)
 - Localization: https://github.com/starcat-app/starcat-localization
 
-**Starcat ecosystem:**
+**Self-hostable support APIs:**
 
 - [starcat-sharing-api](https://github.com/starcat-app/starcat-sharing-api)
 - [starcat-trending-api](https://github.com/starcat-app/starcat-trending-api)
