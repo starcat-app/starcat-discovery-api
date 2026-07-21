@@ -1,0 +1,73 @@
+name: Fly Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 生产发布不可相互抢占，后触发的任务排队等待前一次部署结束。
+concurrency:
+  group: starcat-discovery-api-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    # workflow_run 也会在分支、PR 和失败场景触发；这里只接受通过 CI 的正式 tag。
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v6
+        with:
+          # workflow_run 默认指向 main，必须固定到真正通过 CI 的提交。
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            TAG="${{ github.event.workflow_run.head_branch }}"
+          else
+            TAG=$(git describe --tags --exact-match HEAD)
+          fi
+
+          printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "production deploy requires an exact vX.Y.Z tag, got: $TAG" >&2
+            exit 1
+          }
+
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG")
+          HEAD_COMMIT=$(git rev-parse HEAD)
+          if [ "$TAG_COMMIT" != "$HEAD_COMMIT" ]; then
+            echo "tag $TAG does not point to the tested commit $HEAD_COMMIT" >&2
+            exit 1
+          fi
+
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy production
+        run: >-
+          flyctl deploy
+          --remote-only
+          --app starcat-discovery-api
+          --config fly.toml
+          --ha=false
+          --strategy immediate
+          --build-arg VERSION="${{ steps.version.outputs.version }}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
