@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +14,8 @@ import (
 )
 
 func TestServiceSync(t *testing.T) {
-	sqliteStore, err := store.NewSQLiteStore(context.Background(), filepath.Join(t.TempDir(), "discovery.db"))
+	dbPath := filepath.Join(t.TempDir(), "discovery.db")
+	sqliteStore, err := store.NewSQLiteStore(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("NewSQLiteStore() error = %v", err)
 	}
@@ -37,6 +39,35 @@ func TestServiceSync(t *testing.T) {
 	}
 	if len(page.Items) == 0 {
 		t.Fatalf("expected ranking items")
+	}
+
+	// 星标历史缓存是独立能力，但 ingest 既有每日精确快照仍是 Discovery 趋势的生产链路。
+	// 这里从真实 SQLite 文件验证完整 Sync 没有漏掉 RecordDailySnapshot 调用。
+	readDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite for snapshot assertion: %v", err)
+	}
+	t.Cleanup(func() { _ = readDB.Close() })
+	var date string
+	var stars, forks, watchers, downloads int
+	err = readDB.QueryRow(`
+		SELECT date, stars, forks, watchers, release_download_count
+		FROM repo_daily_snapshots
+		WHERE gh_repo_id = 100
+	`).Scan(&date, &stars, &forks, &watchers, &downloads)
+	if err != nil {
+		t.Fatalf("query production daily snapshot: %v", err)
+	}
+	if date != "2026-06-30" || stars != 4200 || forks != 210 ||
+		watchers != 4200 || downloads != 500 {
+		t.Fatalf(
+			"unexpected production daily snapshot: date=%s stars=%d forks=%d watchers=%d downloads=%d",
+			date,
+			stars,
+			forks,
+			watchers,
+			downloads,
+		)
 	}
 }
 
