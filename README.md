@@ -53,7 +53,7 @@ brew install --cask starcat
 > Starcat provides hosted defaults for normal users. This API is open source so advanced users can inspect it, run it locally, or deploy their own instance.
 <!-- starcat-promo:end -->
 
-`starcat-discovery-api` provides the discovery feed, popular repository rankings, and new-release rankings for Starcat's Discovery section. It also retains a diagnostic endpoint for the new trending candidate pipeline.
+`starcat-discovery-api` provides the discovery feed, popular repository rankings, new-release rankings, and an opt-in public-repository star-history cache for Starcat. It also retains a diagnostic endpoint for the new trending candidate pipeline.
 
 This service is independent of `starcat-trending-api`. The existing trending pipeline remains unchanged, while this service handles Discovery features only.
 
@@ -64,6 +64,7 @@ This service is independent of `starcat-trending-api`. The existing trending pip
 - Separate standard and admin API keys
 - SQLite persistence backed by a Fly.io volume
 - GitHub PAT pool for Search, repository, and release ingestion
+- Bounded asynchronous star-history workers with SQLite cache, ETag, and query budget guards
 - Open-source project files: README, LICENSE, CONTRIBUTING, SECURITY, Dockerfile, and Fly.io configuration
 
 ## Quick Start
@@ -90,6 +91,19 @@ The default port is `5006`.
 | `FULL_SYNC_CRON` | No | `23 2 * * *` | Full sync cron schedule |
 | `CACHE_TTL_SECONDS` | No | `10800` | In-memory cache TTL for `/discovery/bulk` |
 | `FEED_TARGET_SIZE` | No | `500` | Global GitHub Search candidate budget per sync, capped by the service at `1600` |
+| `STAR_HISTORY_ENABLED` | No | `false` | Enables the GH Archive / BigQuery star-history provider |
+| `STAR_HISTORY_CACHE_TTL_SECONDS` | No | `86400` | Successful history cache TTL |
+| `STAR_HISTORY_NEGATIVE_TTL_SECONDS` | No | `600` | Failed-build negative cache TTL |
+| `STAR_HISTORY_BUILD_TIMEOUT_SECONDS` | No | `300` | Per-build worker timeout |
+| `STAR_HISTORY_WORKER_CONCURRENCY` | No | `1` | Fixed worker count |
+| `STAR_HISTORY_QUEUE_CAPACITY` | No | `32` | Bounded pending build capacity |
+| `STAR_HISTORY_MAX_POINTS` | No | `500` | Maximum points returned per series |
+| `GCP_PROJECT_ID` | When enabled | None | Billing project used for parameterized BigQuery queries |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | No | ADC | Service-account JSON injected only as a server secret |
+| `BIGQUERY_MAX_BYTES_BILLED` | When enabled | None | Hard maximum bytes billed for one repository build |
+| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | When enabled | None | Conservative daily worker budget; must cover at least one query |
+
+Star history remains disabled until the GH Archive / BigQuery M0 query and cost validation is explicitly authorized and completed. Enabling it does not happen as part of a normal deployment.
 
 ## API
 
@@ -106,6 +120,7 @@ GET /api/v1/discovery/bulk
 GET /api/v1/discovery/languages
 GET /api/v1/discovery/topics
 GET /api/v1/discovery/platforms
+GET /api/v1/repos/{owner}/{repo}/star-history?repo_id={id}&range=3m|1y|all
 GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
 ```
@@ -117,6 +132,8 @@ POST /internal/sync/discovery
 ```
 
 The discovery, popular, and new-release endpoints read precomputed results from SQLite. `/discovery/bulk` provides the complete public catalog snapshot required by Starcat's local-first cache. The admin sync endpoint triggers GitHub ingestion and rebuilds the rankings. Trending candidates remain available only through `/internal/discovery/trending-candidates`, which requires an Admin API Key. They are excluded from summary, bulk, and the Starcat UI. The client continues to use the existing `starcat-trending-api`.
+
+The star-history endpoint requires a stable GitHub `repo_id`. A cache hit returns `200` with `ETag` and `Cache-Control`; the first valid public-repository miss returns `202` plus `Retry-After: 5` while a bounded worker prepares the cache. The service rejects private repositories and verifies that the ID still matches `owner/repo`. See [`docs/api.md`](docs/api.md) for the complete response and error contract.
 
 ## Synchronization and Classification
 

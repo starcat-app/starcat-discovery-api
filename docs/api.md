@@ -190,6 +190,84 @@ Starcat 本地优先缓存用的全量公开 catalog 快照。该接口不接收
 
 返回平台元数据。
 
+### `GET /api/v1/repos/{owner}/{repo}/star-history`
+
+返回公开仓库星标历史。需要普通 API key，且服务端必须已显式开启 `STAR_HISTORY_ENABLED`。
+
+查询参数：
+
+| 参数 | 必填 | 说明 |
+|---|---:|---|
+| `repo_id` | 是 | 稳定 GitHub repository ID，必须为正整数 |
+| `range` | 否 | `3m`、`1y` 或 `all`，默认 `1y` |
+
+服务端会先读独立 SQLite 缓存。只有首次 miss 或缓存过期时才使用服务端 GitHub PAT 校验公开仓库、`repo_id` 与 `owner/repo`，随后进入有界 worker queue；HTTP handler 不直接执行全历史查询。
+
+缓存命中响应：
+
+```http
+HTTP/1.1 200 OK
+ETag: "a1b2..."
+Cache-Control: private, max-age=86400
+```
+
+```json
+{
+  "schema_version": 1,
+  "data": {
+    "repo_id": 123456,
+    "full_name": "owner/repo",
+    "current_stars": 42810,
+    "range": "1y",
+    "coverage_start": "2011-02-12",
+    "generated_at": "2026-07-27T08:30:00Z",
+    "points": [
+      {
+        "date": "2026-07-27",
+        "count": 42810,
+        "source": "gh_archive",
+        "precision": "estimated"
+      }
+    ]
+  },
+  "meta": {
+    "cache": "hit",
+    "max_age_seconds": 86400
+  }
+}
+```
+
+客户端带匹配的 `If-None-Match` 时返回无 body 的 `304`。首次有效 miss 和已有构建任务统一返回：
+
+```http
+HTTP/1.1 202 Accepted
+Retry-After: 5
+```
+
+```json
+{
+  "schema_version": 1,
+  "error": {
+    "code": "STAR_HISTORY_BUILDING",
+    "message": "Star history is being prepared."
+  }
+}
+```
+
+固定错误语义：
+
+| HTTP | code | 说明 |
+|---:|---|---|
+| `400` | `INVALID_REPOSITORY` | path、`repo_id` 或 `range` 非法 |
+| `401` | `UNAUTHORIZED` | 缺少或无效 Bearer API key |
+| `404` | `REPOSITORY_NOT_FOUND` | GitHub 找不到目标仓库 |
+| `409` | `REPOSITORY_ID_MISMATCH` | repo ID 与 owner/name 不一致或仓库已改名 |
+| `422` | `PRIVATE_REPOSITORY_UNSUPPORTED` | 私有仓库不进入公共历史链路 |
+| `429` | `RATE_LIMITED` | GitHub 限流或有界构建队列已满；读取 `Retry-After` |
+| `503` | `HISTORY_PROVIDER_UNAVAILABLE` | 功能未开启、负缓存命中或 Provider 暂不可用 |
+
+`3m` 按日、`1y` 按 ISO 周、`all` 按月降采样，最多返回 `STAR_HISTORY_MAX_POINTS` 个点。`gh_archive + estimated` 是估算历史，`discovery_snapshot + snapshot` 是精确快照；两者不能混写语义。当前 M0 未获查询授权，因此部署环境必须保持 `STAR_HISTORY_ENABLED=false`，不能把代码就绪描述为真实数据链路已验收。
+
 ### `POST /internal/sync/discovery`
 
 需要 admin API key。触发同步任务，`mode=incremental` 轻同步，`mode=full` 全量同步。

@@ -53,7 +53,7 @@ brew install --cask starcat
 > Starcat 为普通用户提供默认托管服务。这个 API 开源出来，是为了让进阶用户可以审查实现、本地运行，或部署自己的实例。
 <!-- starcat-promo:end -->
 
-`starcat-discovery-api` 为 Starcat 的「探索」入口提供发现流、热门榜单、新发布榜单，并保留新版趋势候选诊断接口。
+`starcat-discovery-api` 为 Starcat 提供发现流、热门榜单、新发布榜单，以及按需开启的公开仓库星标历史缓存，并保留新版趋势候选诊断接口。
 
 本服务独立于 `starcat-trending-api`。旧趋势链路保持不变，新服务只负责 Discovery 相关能力。
 
@@ -64,6 +64,7 @@ brew install --cask starcat
 - 普通 API Key 与 Admin API Key 分离
 - SQLite 持久化，Fly.io volume 保存数据
 - GitHub PAT 池驱动 Search / repo / release ingest
+- 有界异步星标历史 worker、SQLite 缓存、ETag 与查询预算护栏
 - 开源友好的 README、LICENSE、CONTRIBUTING、SECURITY、Dockerfile、Fly.io 配置
 
 ## 快速开始
@@ -90,6 +91,19 @@ go run ./cmd/server/
 | `FULL_SYNC_CRON` | 否 | `23 2 * * *` | 全量同步 cron |
 | `CACHE_TTL_SECONDS` | 否 | `10800` | `/discovery/bulk` 进程内缓存 TTL |
 | `FEED_TARGET_SIZE` | 否 | `500` | 每轮 GitHub Search 的全局候选预算，服务端最高限制为 `1600` |
+| `STAR_HISTORY_ENABLED` | 否 | `false` | 是否开启 GH Archive / BigQuery 星标历史 Provider |
+| `STAR_HISTORY_CACHE_TTL_SECONDS` | 否 | `86400` | 成功历史缓存 TTL |
+| `STAR_HISTORY_NEGATIVE_TTL_SECONDS` | 否 | `600` | 构建失败负缓存 TTL |
+| `STAR_HISTORY_BUILD_TIMEOUT_SECONDS` | 否 | `300` | 单次 worker 构建超时 |
+| `STAR_HISTORY_WORKER_CONCURRENCY` | 否 | `1` | 固定 worker 数量 |
+| `STAR_HISTORY_QUEUE_CAPACITY` | 否 | `32` | 待构建任务有界队列容量 |
+| `STAR_HISTORY_MAX_POINTS` | 否 | `500` | 单个返回序列最大点数 |
+| `GCP_PROJECT_ID` | 开启时 | 无 | 参数化 BigQuery 查询的计费项目 |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | 否 | ADC | 只能通过服务端 secret 注入的 service account JSON |
+| `BIGQUERY_MAX_BYTES_BILLED` | 开启时 | 无 | 单仓构建的扫描字节硬上限 |
+| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | 开启时 | 无 | worker 每日保守预算，至少覆盖一次查询 |
+
+星标历史在 GH Archive / BigQuery M0 查询与成本验证获得单独授权并完成前保持关闭；普通部署不会自动开启。
 
 ## API
 
@@ -106,6 +120,7 @@ GET /api/v1/discovery/bulk
 GET /api/v1/discovery/languages
 GET /api/v1/discovery/topics
 GET /api/v1/discovery/platforms
+GET /api/v1/repos/{owner}/{repo}/star-history?repo_id={id}&range=3m|1y|all
 GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
 ```
@@ -117,6 +132,8 @@ POST /internal/sync/discovery
 ```
 
 发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势候选只保留在 `/internal/discovery/trending-candidates`，需要 Admin API Key，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
+
+星标历史接口必填稳定 GitHub `repo_id`。缓存命中返回带 `ETag` 和 `Cache-Control` 的 `200`；公开仓库首次 miss 经 ID 与 owner/name 校验后返回 `202 + Retry-After: 5`，由有界 worker 异步构建。私有仓库会被拒绝。完整响应和错误契约见 [`docs/api.md`](docs/api.md)。
 
 ## 同步与分类逻辑
 
