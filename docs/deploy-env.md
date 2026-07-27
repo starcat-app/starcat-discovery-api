@@ -30,4 +30,6 @@
 
 `STAR_HISTORY_ENABLED` 默认必须保持 `false`。只有 GH Archive / BigQuery M0 已完成表结构、覆盖范围、扫描字节、耗时和费用验证，并获得单独上线授权后，才可在对应环境配置 GCP 项目、凭据与两个预算值。普通开发、测试或部署不得用猜测值开启。
 
+单仓首次构建的查询起点取 `max(repository.created_at, GH Archive 覆盖起点)`；M0 预算必须按裁剪后的真实 dry run 扫描量制定，不能继续按所有仓库统一扫描完整归档历史估算。
+
 服务不会接收或记录用户 GitHub token、Star 列表或仓库访问顺序；GitHub 校验和 BigQuery 查询只使用服务端凭据。

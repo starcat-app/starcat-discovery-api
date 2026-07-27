@@ -104,6 +104,7 @@ go run ./cmd/server/
 | `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | 开启时 | 无 | worker 按 UTC 日期持久化的每日保守预算，至少覆盖一次查询 |
 
 星标历史在 GH Archive / BigQuery M0 查询与成本验证获得单独授权并完成前保持关闭；普通部署不会自动开启。
+首次构建会使用服务端 GitHub 仓库元数据中的 `created_at` 裁剪 BigQuery 日期范围，不扫描仓库创建前的 GH Archive 日表。
 
 ## API
 

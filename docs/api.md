@@ -201,7 +201,7 @@ Starcat 本地优先缓存用的全量公开 catalog 快照。该接口不接收
 | `repo_id` | 是 | 稳定 GitHub repository ID，必须为正整数 |
 | `range` | 否 | `3m`、`1y` 或 `all`，默认 `1y` |
 
-服务端会先读独立 SQLite 缓存。只有首次 miss 或缓存过期时才使用服务端 GitHub PAT 校验公开仓库、`repo_id` 与 `owner/repo`，随后进入有界 worker queue；HTTP handler 不直接执行全历史查询。
+服务端会先读独立 SQLite 缓存。只有首次 miss 或缓存过期时才使用服务端 GitHub PAT 校验公开仓库、`repo_id` 与 `owner/repo`，并读取可信的 `created_at`。BigQuery 查询从 `max(repository.created_at, GH Archive 覆盖起点)` 开始，避免扫描仓库创建前的日表；随后任务进入有界 worker queue，HTTP handler 不直接执行历史查询。
 
 缓存命中响应：
 

@@ -104,6 +104,7 @@ The default port is `5006`.
 | `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | When enabled | None | Persistent UTC daily worker budget; must cover at least one query |
 
 Star history remains disabled until the GH Archive / BigQuery M0 query and cost validation is explicitly authorized and completed. Enabling it does not happen as part of a normal deployment.
+The initial build bounds its BigQuery date range with the repository `created_at` returned by the server-side GitHub request, so it does not scan GH Archive daily tables from before the repository existed.
 
 ## API
 
