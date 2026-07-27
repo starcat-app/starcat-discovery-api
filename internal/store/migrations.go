@@ -153,6 +153,12 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_repo_star_history_cache_expiry
 			ON repo_star_history_cache(status, expires_at);
 
+		CREATE TABLE IF NOT EXISTS star_history_daily_budgets (
+			budget_date    TEXT PRIMARY KEY,
+			reserved_bytes INTEGER NOT NULL DEFAULT 0 CHECK (reserved_bytes >= 0),
+			updated_at     TEXT NOT NULL
+		);
+
 		CREATE TABLE IF NOT EXISTS feed_exposure (
 			feed_key       TEXT NOT NULL,
 			gh_repo_id     INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,

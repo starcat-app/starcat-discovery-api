@@ -101,7 +101,7 @@ The default port is `5006`.
 | `GCP_PROJECT_ID` | When enabled | None | Billing project used for parameterized BigQuery queries |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | No | ADC | Service-account JSON injected only as a server secret |
 | `BIGQUERY_MAX_BYTES_BILLED` | When enabled | None | Hard maximum bytes billed for one repository build |
-| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | When enabled | None | Conservative daily worker budget; must cover at least one query |
+| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | When enabled | None | Persistent UTC daily worker budget; must cover at least one query |
 
 Star history remains disabled until the GH Archive / BigQuery M0 query and cost validation is explicitly authorized and completed. Enabling it does not happen as part of a normal deployment.
 

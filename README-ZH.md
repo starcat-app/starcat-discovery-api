@@ -101,7 +101,7 @@ go run ./cmd/server/
 | `GCP_PROJECT_ID` | 开启时 | 无 | 参数化 BigQuery 查询的计费项目 |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | 否 | ADC | 只能通过服务端 secret 注入的 service account JSON |
 | `BIGQUERY_MAX_BYTES_BILLED` | 开启时 | 无 | 单仓构建的扫描字节硬上限 |
-| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | 开启时 | 无 | worker 每日保守预算，至少覆盖一次查询 |
+| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | 开启时 | 无 | worker 按 UTC 日期持久化的每日保守预算，至少覆盖一次查询 |
 
 星标历史在 GH Archive / BigQuery M0 查询与成本验证获得单独授权并完成前保持关闭；普通部署不会自动开启。
 

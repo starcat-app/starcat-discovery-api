@@ -24,7 +24,7 @@
 | `GCP_PROJECT_ID` | 开启时 | BigQuery 查询计费项目 |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | 否 | service account JSON；留空使用 ADC，只能通过 secret 注入 |
 | `BIGQUERY_MAX_BYTES_BILLED` | 开启时 | 单仓查询扫描字节硬上限，必须为正整数 |
-| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | 开启时 | 每日保守预算，必须不小于单次上限 |
+| `STAR_HISTORY_DAILY_MAX_BYTES_BILLED` | 开启时 | 按 UTC 日期持久化的每日保守预算，服务重启后继续累计，且必须不小于单次上限 |
 
 ## 星标历史启用门禁
 

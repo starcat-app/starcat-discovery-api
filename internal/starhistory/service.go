@@ -34,6 +34,12 @@ type CacheStore interface {
 	SaveStarHistoryReady(ctx context.Context, cache model.StarHistoryCache) error
 	SaveStarHistoryFailed(ctx context.Context, cache model.StarHistoryCache) error
 	ListStarHistorySnapshots(ctx context.Context, repoID int64) ([]model.StarHistoryPoint, error)
+	ReserveStarHistoryDailyBudget(
+		ctx context.Context,
+		now time.Time,
+		amount int64,
+		maximum int64,
+	) (bool, error)
 }
 
 // ServiceConfig 固化 worker、缓存和费用护栏；所有值都必须是正数。
@@ -70,8 +76,8 @@ type LookupResult struct {
 // Service 管理星标历史 cache-first 查询和有界异步构建。
 //
 // HTTP 请求只做缓存读取与任务入队，GH Archive 全历史查询始终由固定数量 worker
-// 执行。每日预算按单次最大扫描量保守预留，服务重启最多丢失内存计数，不会绕过
-// BigQuery 自身的 maximumBytesBilled 硬限制。
+// 执行。每日预算按单次最大扫描量保守预留到 SQLite，由原子 SQL 同时约束并发 worker
+// 与服务重启后的累计费用；BigQuery maximumBytesBilled 继续约束每一次查询。
 type Service struct {
 	store    CacheStore
 	provider HistoryEventProvider
@@ -81,10 +87,6 @@ type Service struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	now      func() time.Time
-
-	budgetMu   sync.Mutex
-	budgetDay  string
-	budgetUsed int64
 }
 
 // NewService 校验全部护栏并立即启动固定数量 worker。
@@ -226,13 +228,29 @@ func (s *Service) worker() {
 
 func (s *Service) build(request model.StarHistoryBuildRequest) {
 	startedAt := s.now().UTC()
-	if !s.reserveDailyBudget(startedAt, s.config.MaximumBytesBilled) {
+	ctx, cancel := context.WithTimeout(s.ctx, s.config.BuildTimeout)
+	defer cancel()
+
+	reserved, err := s.store.ReserveStarHistoryDailyBudget(
+		ctx,
+		startedAt,
+		s.config.MaximumBytesBilled,
+		s.config.DailyMaximumBytes,
+	)
+	if err != nil {
+		_ = s.saveFailed(
+			context.Background(),
+			request,
+			fmt.Errorf("reserve daily query budget: %w", err),
+			startedAt,
+		)
+		return
+	}
+	if !reserved {
 		_ = s.saveFailed(context.Background(), request, errors.New("daily query budget exhausted"), startedAt)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(s.ctx, s.config.BuildTimeout)
-	defer cancel()
 	startDate, _ := time.Parse("2006-01-02", ghArchiveCoverageStart)
 	events, err := s.provider.DailyWatchEvents(ctx, HistoryEventRequest{
 		RepoID:             request.GhRepoID,
@@ -293,19 +311,4 @@ func (s *Service) saveFailed(
 		ErrorSummary: buildErr.Error(),
 		UpdatedAt:    now,
 	})
-}
-
-func (s *Service) reserveDailyBudget(now time.Time, amount int64) bool {
-	s.budgetMu.Lock()
-	defer s.budgetMu.Unlock()
-	day := now.UTC().Format("2006-01-02")
-	if s.budgetDay != day {
-		s.budgetDay = day
-		s.budgetUsed = 0
-	}
-	if s.budgetUsed+amount > s.config.DailyMaximumBytes {
-		return false
-	}
-	s.budgetUsed += amount
-	return true
 }

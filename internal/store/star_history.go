@@ -11,6 +11,44 @@ import (
 	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
 
+// ReserveStarHistoryDailyBudget 按 UTC 日期原子预留一次查询的最大扫描量。
+//
+// 预算记录必须落到 SQLite，不能放在 Service 内存中：worker 并发执行时需要由单条
+// SQL 保证上限，服务重启后也必须延续当天已经预留的额度。预留使用最大可能扫描量，
+// 即使 provider 后续失败也不退回，从而保持费用护栏的保守语义。
+func (s *SQLiteStore) ReserveStarHistoryDailyBudget(
+	ctx context.Context,
+	now time.Time,
+	amount int64,
+	maximum int64,
+) (bool, error) {
+	if now.IsZero() {
+		return false, fmt.Errorf("budget time is required")
+	}
+	if amount <= 0 || maximum <= 0 {
+		return false, fmt.Errorf("budget amount and maximum must be positive")
+	}
+	if amount > maximum {
+		return false, nil
+	}
+
+	budgetDate := now.UTC().Format("2006-01-02")
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO star_history_daily_budgets (
+			budget_date, reserved_bytes, updated_at
+		) VALUES (?, ?, ?)
+		ON CONFLICT(budget_date) DO UPDATE SET
+			reserved_bytes = star_history_daily_budgets.reserved_bytes + excluded.reserved_bytes,
+			updated_at = excluded.updated_at
+		WHERE star_history_daily_budgets.reserved_bytes + excluded.reserved_bytes <= ?
+	`, budgetDate, amount, timeString(now.UTC()), maximum)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
 // ClaimStarHistoryBuild 原子认领首次 miss 或已过期缓存的构建任务。
 //
 // 未过期的 building / ready / failed 都返回 claimed=false：前者用于同仓去重，后两者

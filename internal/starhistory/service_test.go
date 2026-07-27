@@ -94,6 +94,45 @@ func TestServiceAppliesDailyBudgetBeforeCallingProvider(t *testing.T) {
 	}
 }
 
+func TestServiceKeepsDailyBudgetAcrossReconstruction(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	store := newMemoryCacheStore()
+	config := testServiceConfig()
+	config.DailyMaximumBytes = config.MaximumBytesBilled
+
+	firstProvider := &fakeHistoryProvider{}
+	firstService, err := NewService(store, firstProvider, config)
+	if err != nil {
+		t.Fatalf("first NewService() error = %v", err)
+	}
+	firstService.now = func() time.Time { return now }
+	first := model.StarHistoryBuildRequest{GhRepoID: 11, FullName: "octo/one", CurrentStars: 1}
+	if claimed, enqueueErr := firstService.Enqueue(t.Context(), first); enqueueErr != nil || !claimed {
+		t.Fatalf("first Enqueue() = %v, %v", claimed, enqueueErr)
+	}
+	waitForCacheStatus(t, store, first.GhRepoID, model.StarHistoryReady)
+	firstService.Close()
+
+	secondProvider := &fakeHistoryProvider{}
+	secondService, err := NewService(store, secondProvider, config)
+	if err != nil {
+		t.Fatalf("second NewService() error = %v", err)
+	}
+	secondService.now = func() time.Time { return now }
+	t.Cleanup(secondService.Close)
+	second := model.StarHistoryBuildRequest{GhRepoID: 12, FullName: "octo/two", CurrentStars: 2}
+	if claimed, enqueueErr := secondService.Enqueue(t.Context(), second); enqueueErr != nil || !claimed {
+		t.Fatalf("second Enqueue() = %v, %v", claimed, enqueueErr)
+	}
+	cache := waitForCacheStatus(t, store, second.GhRepoID, model.StarHistoryFailed)
+	if cache.ErrorSummary != "daily query budget exhausted" {
+		t.Fatalf("unexpected negative cache error = %q", cache.ErrorSummary)
+	}
+	if secondProvider.callCount != 0 {
+		t.Fatalf("provider was called %d times after budget was exhausted", secondProvider.callCount)
+	}
+}
+
 func TestServiceDeduplicatesBuildAndFailsFastWhenQueueIsFull(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	store := newMemoryCacheStore()
@@ -234,6 +273,7 @@ type memoryCacheStore struct {
 	mu        sync.Mutex
 	caches    map[int64]model.StarHistoryCache
 	snapshots map[int64][]model.StarHistoryPoint
+	budgets   map[string]int64
 	changed   chan struct{}
 }
 
@@ -241,6 +281,7 @@ func newMemoryCacheStore() *memoryCacheStore {
 	return &memoryCacheStore{
 		caches:    make(map[int64]model.StarHistoryCache),
 		snapshots: make(map[int64][]model.StarHistoryPoint),
+		budgets:   make(map[string]int64),
 		changed:   make(chan struct{}, 16),
 	}
 }
@@ -307,6 +348,22 @@ func (s *memoryCacheStore) ListStarHistorySnapshots(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]model.StarHistoryPoint(nil), s.snapshots[repoID]...), nil
+}
+
+func (s *memoryCacheStore) ReserveStarHistoryDailyBudget(
+	_ context.Context,
+	now time.Time,
+	amount int64,
+	maximum int64,
+) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	day := now.UTC().Format("2006-01-02")
+	if s.budgets[day]+amount > maximum {
+		return false, nil
+	}
+	s.budgets[day] += amount
+	return true, nil
 }
 
 func (s *memoryCacheStore) notify() {
