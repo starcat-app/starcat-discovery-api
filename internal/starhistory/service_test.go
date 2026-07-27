@@ -2,6 +2,7 @@ package starhistory
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -93,6 +94,77 @@ func TestServiceAppliesDailyBudgetBeforeCallingProvider(t *testing.T) {
 	}
 }
 
+func TestServiceDeduplicatesBuildAndFailsFastWhenQueueIsFull(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	store := newMemoryCacheStore()
+	provider := &blockingHistoryProvider{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	config := testServiceConfig()
+	config.QueueCapacity = 1
+	service, err := NewService(store, provider, config)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	service.now = func() time.Time { return now }
+	t.Cleanup(func() {
+		close(provider.release)
+		service.Close()
+	})
+
+	first := model.StarHistoryBuildRequest{GhRepoID: 1, FullName: "octo/one", CurrentStars: 1}
+	if claimed, enqueueErr := service.Enqueue(t.Context(), first); enqueueErr != nil || !claimed {
+		t.Fatalf("first Enqueue() = %v, %v", claimed, enqueueErr)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start first build")
+	}
+	if claimed, enqueueErr := service.Enqueue(t.Context(), first); enqueueErr != nil || claimed {
+		t.Fatalf("duplicate Enqueue() = %v, %v", claimed, enqueueErr)
+	}
+
+	second := model.StarHistoryBuildRequest{GhRepoID: 2, FullName: "octo/two", CurrentStars: 2}
+	if claimed, enqueueErr := service.Enqueue(t.Context(), second); enqueueErr != nil || !claimed {
+		t.Fatalf("second Enqueue() = %v, %v", claimed, enqueueErr)
+	}
+	third := model.StarHistoryBuildRequest{GhRepoID: 3, FullName: "octo/three", CurrentStars: 3}
+	if claimed, enqueueErr := service.Enqueue(t.Context(), third); claimed ||
+		!errors.Is(enqueueErr, ErrQueueFull) {
+		t.Fatalf("full queue Enqueue() = %v, %v", claimed, enqueueErr)
+	}
+	cache := waitForCacheStatus(t, store, third.GhRepoID, model.StarHistoryFailed)
+	if cache.ErrorSummary != ErrQueueFull.Error() {
+		t.Fatalf("queue negative cache = %+v", cache)
+	}
+}
+
+func TestServiceTimesOutProviderAndWritesNegativeCache(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	store := newMemoryCacheStore()
+	provider := &timeoutHistoryProvider{}
+	config := testServiceConfig()
+	config.BuildTimeout = 20 * time.Millisecond
+	service, err := NewService(store, provider, config)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	service.now = func() time.Time { return now }
+	t.Cleanup(service.Close)
+
+	request := model.StarHistoryBuildRequest{GhRepoID: 4, FullName: "octo/slow", CurrentStars: 4}
+	if claimed, enqueueErr := service.Enqueue(t.Context(), request); enqueueErr != nil || !claimed {
+		t.Fatalf("Enqueue() = %v, %v", claimed, enqueueErr)
+	}
+	cache := waitForCacheStatus(t, store, request.GhRepoID, model.StarHistoryFailed)
+	if !errors.Is(provider.lastError, context.DeadlineExceeded) ||
+		cache.ErrorSummary != context.DeadlineExceeded.Error() {
+		t.Fatalf("timeout result: provider=%v cache=%+v", provider.lastError, cache)
+	}
+}
+
 func testServiceConfig() ServiceConfig {
 	return ServiceConfig{
 		CacheTTL:           24 * time.Hour,
@@ -111,6 +183,40 @@ type fakeHistoryProvider struct {
 	events      []DailyWatchEvent
 	lastRequest HistoryEventRequest
 	callCount   int
+}
+
+type blockingHistoryProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingHistoryProvider) DailyWatchEvents(
+	ctx context.Context,
+	_ HistoryEventRequest,
+) ([]DailyWatchEvent, error) {
+	select {
+	case p.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.release:
+		return []DailyWatchEvent{}, nil
+	}
+}
+
+type timeoutHistoryProvider struct {
+	lastError error
+}
+
+func (p *timeoutHistoryProvider) DailyWatchEvents(
+	ctx context.Context,
+	_ HistoryEventRequest,
+) ([]DailyWatchEvent, error) {
+	<-ctx.Done()
+	p.lastError = ctx.Err()
+	return nil, p.lastError
 }
 
 func (p *fakeHistoryProvider) DailyWatchEvents(

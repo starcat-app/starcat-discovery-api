@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -160,5 +161,22 @@ func TestClientSearchRepositoriesUsesCandidateStrategyOptions(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClientPreservesGitHubStatusForRepositoryErrors(t *testing.T) {
+	tokens := tokenpool.New([]string{"github_pat_token_one_123456"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Not Found"})
+	}))
+	defer server.Close()
+
+	client := NewClient(tokens, 50).WithBaseURL(server.URL)
+	client.httpClient = server.Client()
+	_, err := client.GetRepository(t.Context(), "octo/missing")
+	var apiError *APIError
+	if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusNotFound {
+		t.Fatalf("GetRepository() error = %#v", err)
 	}
 }
