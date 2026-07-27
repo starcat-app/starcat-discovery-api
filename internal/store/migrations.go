@@ -137,6 +137,22 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_repo_daily_snapshots_repo
 			ON repo_daily_snapshots(gh_repo_id, date DESC);
 
+		CREATE TABLE IF NOT EXISTS repo_star_history_cache (
+			gh_repo_id      INTEGER PRIMARY KEY,
+			full_name       TEXT NOT NULL,
+			current_stars   INTEGER NOT NULL DEFAULT 0,
+			status          TEXT NOT NULL CHECK (status IN ('building', 'ready', 'failed')),
+			coverage_start  TEXT,
+			points_json     TEXT NOT NULL DEFAULT '[]',
+			generated_at    TEXT,
+			expires_at      TEXT NOT NULL,
+			error_summary   TEXT,
+			updated_at      TEXT NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_repo_star_history_cache_expiry
+			ON repo_star_history_cache(status, expires_at);
+
 		CREATE TABLE IF NOT EXISTS feed_exposure (
 			feed_key       TEXT NOT NULL,
 			gh_repo_id     INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
