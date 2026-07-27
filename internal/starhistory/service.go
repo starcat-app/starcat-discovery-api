@@ -193,6 +193,9 @@ func (s *Service) Enqueue(
 		return false, ErrServiceClosed
 	default:
 	}
+	if request.CreatedAt.IsZero() {
+		return false, fmt.Errorf("repository created_at is required")
+	}
 
 	now := s.now().UTC()
 	claimed, err := s.store.ClaimStarHistoryBuild(
@@ -251,7 +254,7 @@ func (s *Service) build(request model.StarHistoryBuildRequest) {
 		return
 	}
 
-	startDate, _ := time.Parse("2006-01-02", ghArchiveCoverageStart)
+	startDate := historyQueryStartDate(request.CreatedAt)
 	events, err := s.provider.DailyWatchEvents(ctx, HistoryEventRequest{
 		RepoID:             request.GhRepoID,
 		StartDate:          startDate,
@@ -294,6 +297,27 @@ func (s *Service) build(request model.StarHistoryBuildRequest) {
 		ExpiresAt:     generatedAt.Add(s.config.CacheTTL),
 		UpdatedAt:     generatedAt,
 	})
+}
+
+// historyQueryStartDate 从仓库创建日开始读取事件，避免每个仓库都重复扫描 GH Archive
+// 的完整历史；覆盖起点仍作为旧仓库的下限，因为更早日期没有可用事件。
+func historyQueryStartDate(createdAt time.Time) time.Time {
+	createdDay := createdAt.UTC()
+	createdDay = time.Date(
+		createdDay.Year(),
+		createdDay.Month(),
+		createdDay.Day(),
+		0,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	coverageStart, _ := time.Parse("2006-01-02", ghArchiveCoverageStart)
+	if createdDay.Before(coverageStart) {
+		return coverageStart
+	}
+	return createdDay
 }
 
 func (s *Service) saveFailed(

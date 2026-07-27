@@ -74,6 +74,7 @@ func TestStarHistoryHandlerValidatesPublicRepositoryBeforeEnqueue(t *testing.T) 
 		ID:         9,
 		FullName:   "octo/history",
 		Stargazers: 42,
+		CreatedAt:  "2024-03-02T01:02:03Z",
 	}}
 	handler := NewStarHistoryHandler(service, repository, true)
 
@@ -90,6 +91,9 @@ func TestStarHistoryHandlerValidatesPublicRepositoryBeforeEnqueue(t *testing.T) 
 	if service.enqueue.GhRepoID != 9 || service.enqueue.CurrentStars != 42 ||
 		service.enqueue.FullName != "octo/history" {
 		t.Fatalf("unexpected build request: %+v", service.enqueue)
+	}
+	if want := time.Date(2024, 3, 2, 1, 2, 3, 0, time.UTC); !service.enqueue.CreatedAt.Equal(want) {
+		t.Fatalf("created_at = %s, want %s", service.enqueue.CreatedAt, want)
 	}
 	assertErrorCode(t, response, "STAR_HISTORY_BUILDING")
 }
@@ -136,6 +140,12 @@ func TestStarHistoryHandlerMapsStableErrorSemantics(t *testing.T) {
 			status:     http.StatusUnprocessableEntity, code: "PRIVATE_REPOSITORY_UNSUPPORTED",
 		},
 		{
+			name: "invalid repository creation date", url: "/api/v1/repos/octo/history/star-history?repo_id=9",
+			apiKey: "test-api-key", enabled: true, lookup: starhistory.LookupResult{State: starhistory.LookupMiss},
+			repository: github.Repository{ID: 9, FullName: "octo/history", CreatedAt: "invalid"},
+			status:     http.StatusServiceUnavailable, code: "HISTORY_PROVIDER_UNAVAILABLE",
+		},
+		{
 			name: "github rate limited", url: "/api/v1/repos/octo/history/star-history?repo_id=9",
 			apiKey: "test-api-key", enabled: true, lookup: starhistory.LookupResult{State: starhistory.LookupMiss},
 			repoErr: &github.APIError{StatusCode: http.StatusTooManyRequests},
@@ -144,7 +154,9 @@ func TestStarHistoryHandlerMapsStableErrorSemantics(t *testing.T) {
 		{
 			name: "queue full", url: "/api/v1/repos/octo/history/star-history?repo_id=9",
 			apiKey: "test-api-key", enabled: true, lookup: starhistory.LookupResult{State: starhistory.LookupMiss},
-			repository: github.Repository{ID: 9, FullName: "octo/history"},
+			repository: github.Repository{
+				ID: 9, FullName: "octo/history", CreatedAt: "2024-03-02T01:02:03Z",
+			},
 			enqueueErr: starhistory.ErrQueueFull,
 			status:     http.StatusTooManyRequests, code: "RATE_LIMITED", retryAfter: "30",
 		},

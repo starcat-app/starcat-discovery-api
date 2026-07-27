@@ -68,6 +68,7 @@ type StarHistoryBuildRequest struct {
 	GhRepoID     int64
 	FullName     string
 	CurrentStars int
+	CreatedAt    time.Time
 }
 
 // StarHistoryRange 是 API 支持的固定观察范围。

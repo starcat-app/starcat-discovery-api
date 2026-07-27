@@ -34,6 +34,7 @@ func TestServiceBuildsReadyHistoryAndReturnsDownsampledCache(t *testing.T) {
 		GhRepoID:     9001,
 		FullName:     "octo/history",
 		CurrentStars: 12,
+		CreatedAt:    time.Date(2025, 6, 15, 8, 30, 0, 0, time.UTC),
 	}
 	claimed, err := service.Enqueue(t.Context(), request)
 	if err != nil || !claimed {
@@ -60,6 +61,9 @@ func TestServiceBuildsReadyHistoryAndReturnsDownsampledCache(t *testing.T) {
 	if provider.lastRequest.MaximumBytesBilled != testServiceConfig().MaximumBytesBilled {
 		t.Fatalf("provider budget = %d", provider.lastRequest.MaximumBytesBilled)
 	}
+	if want := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC); !provider.lastRequest.StartDate.Equal(want) {
+		t.Fatalf("provider start date = %s, want %s", provider.lastRequest.StartDate, want)
+	}
 }
 
 func TestServiceAppliesDailyBudgetBeforeCallingProvider(t *testing.T) {
@@ -75,13 +79,13 @@ func TestServiceAppliesDailyBudgetBeforeCallingProvider(t *testing.T) {
 	service.now = func() time.Time { return now }
 	t.Cleanup(service.Close)
 
-	first := model.StarHistoryBuildRequest{GhRepoID: 1, FullName: "octo/one", CurrentStars: 1}
+	first := testBuildRequest(1, "octo/one", 1)
 	if claimed, enqueueErr := service.Enqueue(t.Context(), first); enqueueErr != nil || !claimed {
 		t.Fatalf("first Enqueue() = %v, %v", claimed, enqueueErr)
 	}
 	waitForCacheStatus(t, store, first.GhRepoID, model.StarHistoryReady)
 
-	second := model.StarHistoryBuildRequest{GhRepoID: 2, FullName: "octo/two", CurrentStars: 2}
+	second := testBuildRequest(2, "octo/two", 2)
 	if claimed, enqueueErr := service.Enqueue(t.Context(), second); enqueueErr != nil || !claimed {
 		t.Fatalf("second Enqueue() = %v, %v", claimed, enqueueErr)
 	}
@@ -106,7 +110,7 @@ func TestServiceKeepsDailyBudgetAcrossReconstruction(t *testing.T) {
 		t.Fatalf("first NewService() error = %v", err)
 	}
 	firstService.now = func() time.Time { return now }
-	first := model.StarHistoryBuildRequest{GhRepoID: 11, FullName: "octo/one", CurrentStars: 1}
+	first := testBuildRequest(11, "octo/one", 1)
 	if claimed, enqueueErr := firstService.Enqueue(t.Context(), first); enqueueErr != nil || !claimed {
 		t.Fatalf("first Enqueue() = %v, %v", claimed, enqueueErr)
 	}
@@ -120,7 +124,7 @@ func TestServiceKeepsDailyBudgetAcrossReconstruction(t *testing.T) {
 	}
 	secondService.now = func() time.Time { return now }
 	t.Cleanup(secondService.Close)
-	second := model.StarHistoryBuildRequest{GhRepoID: 12, FullName: "octo/two", CurrentStars: 2}
+	second := testBuildRequest(12, "octo/two", 2)
 	if claimed, enqueueErr := secondService.Enqueue(t.Context(), second); enqueueErr != nil || !claimed {
 		t.Fatalf("second Enqueue() = %v, %v", claimed, enqueueErr)
 	}
@@ -152,7 +156,7 @@ func TestServiceDeduplicatesBuildAndFailsFastWhenQueueIsFull(t *testing.T) {
 		service.Close()
 	})
 
-	first := model.StarHistoryBuildRequest{GhRepoID: 1, FullName: "octo/one", CurrentStars: 1}
+	first := testBuildRequest(1, "octo/one", 1)
 	if claimed, enqueueErr := service.Enqueue(t.Context(), first); enqueueErr != nil || !claimed {
 		t.Fatalf("first Enqueue() = %v, %v", claimed, enqueueErr)
 	}
@@ -165,11 +169,11 @@ func TestServiceDeduplicatesBuildAndFailsFastWhenQueueIsFull(t *testing.T) {
 		t.Fatalf("duplicate Enqueue() = %v, %v", claimed, enqueueErr)
 	}
 
-	second := model.StarHistoryBuildRequest{GhRepoID: 2, FullName: "octo/two", CurrentStars: 2}
+	second := testBuildRequest(2, "octo/two", 2)
 	if claimed, enqueueErr := service.Enqueue(t.Context(), second); enqueueErr != nil || !claimed {
 		t.Fatalf("second Enqueue() = %v, %v", claimed, enqueueErr)
 	}
-	third := model.StarHistoryBuildRequest{GhRepoID: 3, FullName: "octo/three", CurrentStars: 3}
+	third := testBuildRequest(3, "octo/three", 3)
 	if claimed, enqueueErr := service.Enqueue(t.Context(), third); claimed ||
 		!errors.Is(enqueueErr, ErrQueueFull) {
 		t.Fatalf("full queue Enqueue() = %v, %v", claimed, enqueueErr)
@@ -193,7 +197,7 @@ func TestServiceTimesOutProviderAndWritesNegativeCache(t *testing.T) {
 	service.now = func() time.Time { return now }
 	t.Cleanup(service.Close)
 
-	request := model.StarHistoryBuildRequest{GhRepoID: 4, FullName: "octo/slow", CurrentStars: 4}
+	request := testBuildRequest(4, "octo/slow", 4)
 	if claimed, enqueueErr := service.Enqueue(t.Context(), request); enqueueErr != nil || !claimed {
 		t.Fatalf("Enqueue() = %v, %v", claimed, enqueueErr)
 	}
@@ -201,6 +205,51 @@ func TestServiceTimesOutProviderAndWritesNegativeCache(t *testing.T) {
 	if !errors.Is(provider.lastError, context.DeadlineExceeded) ||
 		cache.ErrorSummary != context.DeadlineExceeded.Error() {
 		t.Fatalf("timeout result: provider=%v cache=%+v", provider.lastError, cache)
+	}
+}
+
+func TestHistoryQueryStartDateUsesRepositoryCreationDayAndArchiveFloor(t *testing.T) {
+	tests := []struct {
+		name      string
+		createdAt time.Time
+		want      time.Time
+	}{
+		{
+			name:      "repository created after archive coverage",
+			createdAt: time.Date(2024, 3, 2, 23, 30, 0, 0, time.FixedZone("CST", 8*60*60)),
+			want:      time.Date(2024, 3, 2, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:      "repository predates archive coverage",
+			createdAt: time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC),
+			want:      time.Date(2011, 2, 12, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := historyQueryStartDate(test.createdAt); !got.Equal(test.want) {
+				t.Fatalf("historyQueryStartDate() = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestServiceRejectsMissingRepositoryCreationDate(t *testing.T) {
+	service, err := NewService(newMemoryCacheStore(), &fakeHistoryProvider{}, testServiceConfig())
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	t.Cleanup(service.Close)
+
+	request := model.StarHistoryBuildRequest{
+		GhRepoID:     9001,
+		FullName:     "octo/history",
+		CurrentStars: 12,
+	}
+	claimed, enqueueErr := service.Enqueue(t.Context(), request)
+	if claimed || enqueueErr == nil || enqueueErr.Error() != "repository created_at is required" {
+		t.Fatalf("Enqueue() = %v, %v", claimed, enqueueErr)
 	}
 }
 
@@ -214,6 +263,15 @@ func testServiceConfig() ServiceConfig {
 		MaximumPoints:      500,
 		MaximumBytesBilled: 100,
 		DailyMaximumBytes:  1_000,
+	}
+}
+
+func testBuildRequest(repoID int64, fullName string, currentStars int) model.StarHistoryBuildRequest {
+	return model.StarHistoryBuildRequest{
+		GhRepoID:     repoID,
+		FullName:     fullName,
+		CurrentStars: currentStars,
+		CreatedAt:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
 

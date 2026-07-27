@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/starcat-app/starcat-discovery-api/internal/github"
 	"github.com/starcat-app/starcat-discovery-api/internal/model"
@@ -134,11 +135,23 @@ func (h *StarHistoryHandler) HandleStarHistory(w http.ResponseWriter, r *http.Re
 		)
 		return
 	}
+	createdAt, err := time.Parse(time.RFC3339, repository.CreatedAt)
+	if err != nil {
+		WriteError(
+			w,
+			http.StatusServiceUnavailable,
+			"HISTORY_PROVIDER_UNAVAILABLE",
+			"Repository metadata is temporarily unavailable.",
+			nil,
+		)
+		return
+	}
 
 	claimed, err := h.service.Enqueue(r.Context(), model.StarHistoryBuildRequest{
 		GhRepoID:     repository.ID,
 		FullName:     repository.FullName,
 		CurrentStars: repository.Stargazers,
+		CreatedAt:    createdAt,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
