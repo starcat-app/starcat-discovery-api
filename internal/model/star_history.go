@@ -69,3 +69,20 @@ type StarHistoryBuildRequest struct {
 	FullName     string
 	CurrentStars int
 }
+
+// StarHistoryRange 是 API 支持的固定观察范围。
+type StarHistoryRange string
+
+const (
+	StarHistoryRangeThreeMonths StarHistoryRange = "3m"
+	StarHistoryRangeOneYear     StarHistoryRange = "1y"
+	StarHistoryRangeAll         StarHistoryRange = "all"
+)
+
+// StarHistorySeries 是按范围降采样后的 API 领域结果。
+type StarHistorySeries struct {
+	Range         StarHistoryRange   `json:"range"`
+	CoverageStart string             `json:"coverage_start,omitempty"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	Points        []StarHistoryPoint `json:"points"`
+}
