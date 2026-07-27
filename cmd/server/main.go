@@ -21,6 +21,7 @@ import (
 	"github.com/starcat-app/starcat-discovery-api/internal/ingest"
 	"github.com/starcat-app/starcat-discovery-api/internal/middleware"
 	"github.com/starcat-app/starcat-discovery-api/internal/scheduler"
+	"github.com/starcat-app/starcat-discovery-api/internal/starhistory"
 	"github.com/starcat-app/starcat-discovery-api/internal/store"
 	"github.com/starcat-app/starcat-discovery-api/internal/tokenpool"
 	"github.com/starcat-app/starcat-discovery-api/internal/version"
@@ -52,6 +53,43 @@ func main() {
 	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
 	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
 	bulkCache := handler.NewBulkCache(time.Duration(cfg.CacheTTLSeconds) * time.Second)
+	var starHistoryService *starhistory.Service
+	if cfg.StarHistoryEnabled {
+		runner, runnerErr := starhistory.NewAuthorizedBigQueryRESTRunner(
+			context.Background(),
+			[]byte(cfg.GCPCredentialsJSON),
+		)
+		if runnerErr != nil {
+			log.Fatalf("Failed to initialize BigQuery credentials: %v", runnerErr)
+		}
+		provider, providerErr := starhistory.NewGHArchiveBigQueryProvider(cfg.GCPProjectID, runner)
+		if providerErr != nil {
+			log.Fatalf("Failed to initialize star history provider: %v", providerErr)
+		}
+		starHistoryService, err = starhistory.NewService(
+			sqliteStore,
+			provider,
+			starhistory.ServiceConfig{
+				CacheTTL:           time.Duration(cfg.StarHistoryCacheTTL) * time.Second,
+				NegativeCacheTTL:   time.Duration(cfg.StarHistoryNegativeTTL) * time.Second,
+				BuildTimeout:       time.Duration(cfg.StarHistoryBuildTimeout) * time.Second,
+				WorkerConcurrency:  cfg.StarHistoryWorkers,
+				QueueCapacity:      cfg.StarHistoryQueue,
+				MaximumPoints:      cfg.StarHistoryMaxPoints,
+				MaximumBytesBilled: cfg.BigQueryMaxBytesBilled,
+				DailyMaximumBytes:  cfg.StarHistoryDailyBudget,
+			},
+		)
+		if err != nil {
+			log.Fatalf("Failed to initialize star history service: %v", err)
+		}
+		defer starHistoryService.Close()
+	}
+	starHistoryHandler := handler.NewStarHistoryHandler(
+		starHistoryService,
+		githubClient,
+		cfg.StarHistoryEnabled,
+	)
 	if cfg.SyncEnabled {
 		sch := scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache)
 		sch.Start()
@@ -69,6 +107,10 @@ func main() {
 	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
 	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
 	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
+	mux.Handle(
+		"GET /api/v1/repos/{owner}/{repo}/star-history",
+		apiAuth.Wrap(http.HandlerFunc(starHistoryHandler.HandleStarHistory)),
+	)
 	mux.Handle("GET /internal/discovery/trending-candidates", adminAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
 	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService, bulkCache)))
 
@@ -91,6 +133,7 @@ func main() {
 	log.Printf("  GET  /api/v1/discovery/languages - Discovery languages metadata (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/topics    - Discovery topic metadata (api auth required)")
 	log.Printf("  GET  /api/v1/discovery/platforms - Discovery platform metadata (api auth required)")
+	log.Printf("  GET  /api/v1/repos/{owner}/{repo}/star-history - Public repository star history (api auth required)")
 	log.Printf("  GET  /internal/discovery/trending-candidates - New trending candidate diagnostics (admin auth required)")
 	log.Printf("  POST /internal/sync/discovery  - Manual discovery sync (admin auth required)")
 	log.Printf("  GET  /healthz                  - Health check (public)")

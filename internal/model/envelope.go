@@ -12,14 +12,16 @@ type Envelope[T any] struct {
 
 // Meta 是分页、缓存、来源等可选元数据。
 type Meta struct {
-	Page        int    `json:"page,omitempty"`
-	PageSize    int    `json:"page_size,omitempty"`
-	Total       int    `json:"total,omitempty"`
-	NextPage    *int   `json:"next_page,omitempty"`
-	Source      string `json:"source,omitempty"`
-	CacheStatus string `json:"cache_status,omitempty"`
-	GeneratedAt string `json:"generated_at,omitempty"`
-	FetchedAt   string `json:"fetched_at,omitempty"`
+	Page          int    `json:"page,omitempty"`
+	PageSize      int    `json:"page_size,omitempty"`
+	Total         int    `json:"total,omitempty"`
+	NextPage      *int   `json:"next_page,omitempty"`
+	Source        string `json:"source,omitempty"`
+	CacheStatus   string `json:"cache_status,omitempty"`
+	Cache         string `json:"cache,omitempty"`
+	MaxAgeSeconds int    `json:"max_age_seconds,omitempty"`
+	GeneratedAt   string `json:"generated_at,omitempty"`
+	FetchedAt     string `json:"fetched_at,omitempty"`
 }
 
 // ErrorResponse 是非 2xx 响应中的 error 段。

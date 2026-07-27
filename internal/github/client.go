@@ -20,6 +20,20 @@ const (
 	maxTokenAvailabilityWait = 90 * time.Second
 )
 
+// APIError 保留 GitHub HTTP 状态，供上层稳定映射 404 与限流语义。
+//
+// Message 只用于服务端诊断，不应直接透传给 Starcat 客户端，避免把上游响应细节
+// 固化成公共 API 契约。
+type APIError struct {
+	StatusCode int
+	Path       string
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("github api %s returned %d: %s", e.Path, e.StatusCode, e.Message)
+}
+
 // RepositorySearchOptions 描述一次候选仓库搜索。
 //
 // Discovery 需要同时拉取头部、近期活跃和新兴项目，因此 sort 不能再由 client 固定为 stars。
@@ -154,21 +168,41 @@ func (c *Client) get(ctx context.Context, path string, out interface{}) error {
 
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			lastErr = fmt.Errorf("github api %s unauthorized with current token", path)
+			lastErr = &APIError{
+				StatusCode: resp.StatusCode,
+				Path:       path,
+				Message:    "unauthorized with current token",
+			}
 			continue
 		case http.StatusForbidden, http.StatusTooManyRequests:
 			c.disableRateLimited(token, resp)
-			lastErr = fmt.Errorf("github api %s rate limited: %s", path, strings.TrimSpace(string(body)))
+			lastErr = &APIError{
+				StatusCode: resp.StatusCode,
+				Path:       path,
+				Message:    strings.TrimSpace(string(body)),
+			}
 			continue
 		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-			lastErr = fmt.Errorf("github api %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+			lastErr = &APIError{
+				StatusCode: resp.StatusCode,
+				Path:       path,
+				Message:    strings.TrimSpace(string(body)),
+			}
 			continue
 		default:
 			if remainingBelowFloor {
-				lastErr = fmt.Errorf("github api %s returned %d with token below floor: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+				lastErr = &APIError{
+					StatusCode: resp.StatusCode,
+					Path:       path,
+					Message:    "token below floor: " + strings.TrimSpace(string(body)),
+				}
 				continue
 			}
-			return fmt.Errorf("github api %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+			return &APIError{
+				StatusCode: resp.StatusCode,
+				Path:       path,
+				Message:    strings.TrimSpace(string(body)),
+			}
 		}
 	}
 
@@ -265,6 +299,7 @@ type Repository struct {
 	Topics        []string `json:"topics"`
 	Archived      bool     `json:"archived"`
 	Fork          bool     `json:"fork"`
+	Private       bool     `json:"private"`
 	PushedAt      string   `json:"pushed_at"`
 	UpdatedAt     string   `json:"updated_at"`
 	CreatedAt     string   `json:"created_at"`

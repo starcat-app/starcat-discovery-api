@@ -86,3 +86,14 @@ type StarHistorySeries struct {
 	GeneratedAt   time.Time          `json:"generated_at"`
 	Points        []StarHistoryPoint `json:"points"`
 }
+
+// StarHistoryResponse 是客户端稳定消费的公开仓库历史契约。
+type StarHistoryResponse struct {
+	RepoID        int64              `json:"repo_id"`
+	FullName      string             `json:"full_name"`
+	CurrentStars  int                `json:"current_stars"`
+	Range         StarHistoryRange   `json:"range"`
+	CoverageStart string             `json:"coverage_start,omitempty"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	Points        []StarHistoryPoint `json:"points"`
+}
