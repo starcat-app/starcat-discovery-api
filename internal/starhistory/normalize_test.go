@@ -72,13 +72,13 @@ func TestMergeExactSnapshotsPreservesRealDecreaseAndWinsSameDay(t *testing.T) {
 			Date:      "2026-07-02",
 			Count:     98,
 			Source:    model.StarHistorySourceDiscoverySnapshot,
-			Precision: model.StarHistoryExact,
+			Precision: model.StarHistorySnapshot,
 		},
 		{
 			Date:      "2026-07-03",
 			Count:     96,
 			Source:    model.StarHistorySourceDiscoverySnapshot,
-			Precision: model.StarHistoryExact,
+			Precision: model.StarHistorySnapshot,
 		},
 	}
 
@@ -89,7 +89,7 @@ func TestMergeExactSnapshotsPreservesRealDecreaseAndWinsSameDay(t *testing.T) {
 	if len(points) != 3 || points[1].Count != 98 || points[2].Count != 96 {
 		t.Fatalf("exact decrease was not preserved: %+v", points)
 	}
-	if points[1].Precision != model.StarHistoryExact {
+	if points[1].Precision != model.StarHistorySnapshot {
 		t.Fatalf("same-day exact point did not win: %+v", points[1])
 	}
 }

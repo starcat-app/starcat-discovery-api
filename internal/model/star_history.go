@@ -35,7 +35,7 @@ type StarHistoryPrecision string
 
 const (
 	StarHistoryEstimated StarHistoryPrecision = "estimated"
-	StarHistoryExact     StarHistoryPrecision = "exact"
+	StarHistorySnapshot  StarHistoryPrecision = "snapshot"
 )
 
 // StarHistoryPoint 是 API 与缓存共用的日级星标历史点。

@@ -88,8 +88,8 @@ func MergeExactSnapshots(
 		if err := validateHistoryPoint(point); err != nil {
 			return nil, err
 		}
-		if point.Precision != model.StarHistoryExact {
-			return nil, fmt.Errorf("exact snapshot precision must be exact")
+		if point.Precision != model.StarHistorySnapshot {
+			return nil, fmt.Errorf("exact snapshot precision must be snapshot")
 		}
 		byDay[point.Date] = point
 	}
