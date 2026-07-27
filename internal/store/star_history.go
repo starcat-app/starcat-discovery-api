@@ -176,6 +176,38 @@ func (s *SQLiteStore) GetStarHistoryCache(
 	return cache, true, nil
 }
 
+// ListStarHistorySnapshots 返回 Discovery catalog 已经采集到的精确每日快照。
+//
+// 星标历史缓存允许任意公开仓库，因此这里查不到数据是正常结果；worker 只把已有
+// catalog 快照作为精确锚点，不会为了补快照额外请求 GitHub。
+func (s *SQLiteStore) ListStarHistorySnapshots(
+	ctx context.Context,
+	repoID int64,
+) ([]model.StarHistoryPoint, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT date, stars
+		FROM repo_daily_snapshots
+		WHERE gh_repo_id = ?
+		ORDER BY date
+	`, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	points := make([]model.StarHistoryPoint, 0)
+	for rows.Next() {
+		var point model.StarHistoryPoint
+		if err := rows.Scan(&point.Date, &point.Count); err != nil {
+			return nil, err
+		}
+		point.Source = model.StarHistorySourceDiscoverySnapshot
+		point.Precision = model.StarHistorySnapshot
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}
+
 func validateStarHistoryCache(
 	cache model.StarHistoryCache,
 	expectedStatus model.StarHistoryCacheStatus,
