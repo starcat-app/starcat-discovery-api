@@ -1,6 +1,5 @@
 .env
 bin/
-/server
 coverage.out
 coverage.html
 *.log

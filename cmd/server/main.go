@@ -1,30 +1,19 @@
 // Package main 是 starcat-discovery-api 的入口。
 //
-// 本服务承载 Starcat 探索入口中的发现、热门、新发布；新版趋势只保留诊断接口。
-// 首期保持独立服务边界，避免改动已有 starcat-trending-api 调用链。
+// 装配逻辑在可导出的 server 包中，便于 starcat-api 聚合部署复用。
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 
-	"github.com/starcat-app/starcat-discovery-api/internal/config"
-	"github.com/starcat-app/starcat-discovery-api/internal/github"
-	"github.com/starcat-app/starcat-discovery-api/internal/handler"
-	"github.com/starcat-app/starcat-discovery-api/internal/ingest"
-	"github.com/starcat-app/starcat-discovery-api/internal/middleware"
-	"github.com/starcat-app/starcat-discovery-api/internal/scheduler"
-	"github.com/starcat-app/starcat-discovery-api/internal/starhistory"
-	"github.com/starcat-app/starcat-discovery-api/internal/store"
-	"github.com/starcat-app/starcat-discovery-api/internal/tokenpool"
 	"github.com/starcat-app/starcat-discovery-api/internal/version"
+	"github.com/starcat-app/starcat-discovery-api/server"
 )
 
 func main() {
@@ -34,114 +23,21 @@ func main() {
 		log.Printf("[env] .env loaded")
 	}
 
-	cfg, err := config.Load()
+	svc, err := server.FromEnv()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("failed to init discovery server: %v", err)
 	}
-
-	apiAuth := middleware.NewBearerAuth("api", cfg.APIKeys)
-	adminAuth := middleware.NewBearerAuth("admin", cfg.AdminAPIKeys)
-
-	sqliteStore, err := store.NewSQLiteStore(context.Background(), cfg.StoreFile)
-	if err != nil {
-		log.Fatalf("Failed to initialize SQLite: %v", err)
-	}
-	defer sqliteStore.Close()
-
-	pool := tokenpool.New(cfg.GitHubTokens)
-	githubClient := github.NewClient(pool, cfg.RateLimitFloor)
-	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
-	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
-	bulkCache := handler.NewBulkCache(time.Duration(cfg.CacheTTLSeconds) * time.Second)
-	var starHistoryService *starhistory.Service
-	if cfg.StarHistoryEnabled {
-		runner, runnerErr := starhistory.NewAuthorizedBigQueryRESTRunner(
-			context.Background(),
-			[]byte(cfg.GCPCredentialsJSON),
-		)
-		if runnerErr != nil {
-			log.Fatalf("Failed to initialize BigQuery credentials: %v", runnerErr)
-		}
-		provider, providerErr := starhistory.NewGHArchiveBigQueryProvider(cfg.GCPProjectID, runner)
-		if providerErr != nil {
-			log.Fatalf("Failed to initialize star history provider: %v", providerErr)
-		}
-		starHistoryService, err = starhistory.NewService(
-			sqliteStore,
-			provider,
-			starhistory.ServiceConfig{
-				CacheTTL:           time.Duration(cfg.StarHistoryCacheTTL) * time.Second,
-				NegativeCacheTTL:   time.Duration(cfg.StarHistoryNegativeTTL) * time.Second,
-				BuildTimeout:       time.Duration(cfg.StarHistoryBuildTimeout) * time.Second,
-				WorkerConcurrency:  cfg.StarHistoryWorkers,
-				QueueCapacity:      cfg.StarHistoryQueue,
-				MaximumPoints:      cfg.StarHistoryMaxPoints,
-				MaximumBytesBilled: cfg.BigQueryMaxBytesBilled,
-				DailyMaximumBytes:  cfg.StarHistoryDailyBudget,
-			},
-		)
-		if err != nil {
-			log.Fatalf("Failed to initialize star history service: %v", err)
-		}
-		defer starHistoryService.Close()
-	}
-	starHistoryHandler := handler.NewStarHistoryHandler(
-		starHistoryService,
-		githubClient,
-		cfg.StarHistoryEnabled,
-	)
-	if cfg.SyncEnabled {
-		sch := scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache)
-		sch.Start()
-		defer sch.Stop()
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthzHandler)
-	mux.Handle("GET /api/v1/ping", apiAuth.Wrap(handler.HandlePingV1(version.Service, version.Version)))
-	mux.Handle("GET /api/v1/discovery/feed", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleFeed)))
-	mux.Handle("GET /api/v1/discovery/categories/most-popular", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleMostPopular)))
-	mux.Handle("GET /api/v1/discovery/categories/new-releases", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleNewReleases)))
-	mux.Handle("GET /api/v1/discovery/summary", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleSummary)))
-	mux.Handle("GET /api/v1/discovery/bulk", apiAuth.Wrap(discoveryHandler.HandleBulk(bulkCache)))
-	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
-	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
-	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
-	mux.Handle(
-		"GET /api/v1/repos/{owner}/{repo}/star-history",
-		apiAuth.Wrap(http.HandlerFunc(starHistoryHandler.HandleStarHistory)),
-	)
-	mux.Handle("GET /internal/discovery/trending-candidates", adminAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
-	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService, bulkCache)))
+	defer svc.Close()
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		log.Println("Received shutdown signal, closing service...")
+		_ = svc.Close()
 		os.Exit(0)
 	}()
 
-	log.Printf("starcat-discovery-api %s starting on port %s", version.Version, cfg.Port)
-	log.Printf("Endpoints:")
-	log.Printf("  GET  /api/v1/ping              - Connectivity probe for Starcat client (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/feed    - Discovery feed (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/categories/most-popular - Popular ranking (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/categories/new-releases - New releases ranking (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/summary   - Sidebar totals and facet counts (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/bulk      - Full local-first catalog snapshot (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/languages - Discovery languages metadata (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/topics    - Discovery topic metadata (api auth required)")
-	log.Printf("  GET  /api/v1/discovery/platforms - Discovery platform metadata (api auth required)")
-	log.Printf("  GET  /api/v1/repos/{owner}/{repo}/star-history - Public repository star history (api auth required)")
-	log.Printf("  GET  /internal/discovery/trending-candidates - New trending candidate diagnostics (admin auth required)")
-	log.Printf("  POST /internal/sync/discovery  - Manual discovery sync (admin auth required)")
-	log.Printf("  GET  /healthz                  - Health check (public)")
-	handler := middleware.CORS(mux)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, handler))
-}
-
-func healthzHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	log.Printf("starcat-discovery-api %s starting on %s", version.Version, svc.Addr())
+	log.Fatal(http.ListenAndServe(svc.Addr(), svc.Handler()))
 }
