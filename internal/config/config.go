@@ -1,13 +1,13 @@
 // Package config 负责读取 starcat-discovery-api 的运行时配置。
 //
 // 这里集中处理默认值和必填项，避免 main.go 在服务装配时散落环境变量细节。
+// 环境变量解析收敛到 starcat-api-kit/env，本包只保留业务校验。
 package config
 
 import (
 	"fmt"
-	"os"
-	"strconv"
-	"strings"
+
+	kitenv "github.com/starcat-app/starcat-api-kit/env"
 )
 
 const (
@@ -59,29 +59,29 @@ type Config struct {
 // Load 从环境变量读取配置，并校验必填项。
 func Load() (Config, error) {
 	cfg := Config{
-		Port:                    stringEnv("PORT", defaultPort),
-		StoreFile:               stringEnv("STORE_FILE", defaultStoreFile),
-		APIKeys:                 listEnv("API_KEYS"),
-		AdminAPIKeys:            listEnv("ADMIN_API_KEYS"),
-		GitHubTokens:            listEnv("GITHUB_TOKENS"),
-		SyncEnabled:             boolEnv("SYNC_ENABLED", defaultSyncEnabled),
-		SyncCron:                stringEnv("SYNC_CRON", defaultSyncCron),
-		FullSyncCron:            stringEnv("FULL_SYNC_CRON", defaultFullSyncCron),
-		CacheTTLSeconds:         intEnv("CACHE_TTL_SECONDS", defaultCacheTTLSeconds),
-		MaxSearchCallsPerMinute: intEnv("MAX_SEARCH_CALLS_PER_MINUTE", defaultMaxSearchCallsPerMinute),
-		RateLimitFloor:          intEnv("RATE_LIMIT_FLOOR", defaultRateLimitFloor),
-		FeedTargetSize:          intEnv("FEED_TARGET_SIZE", defaultFeedTargetSize),
-		StarHistoryEnabled:      boolEnv("STAR_HISTORY_ENABLED", defaultStarHistoryEnabled),
-		StarHistoryCacheTTL:     intEnv("STAR_HISTORY_CACHE_TTL_SECONDS", defaultStarHistoryCacheTTL),
-		StarHistoryNegativeTTL:  intEnv("STAR_HISTORY_NEGATIVE_TTL_SECONDS", defaultStarHistoryNegativeTTL),
-		StarHistoryBuildTimeout: intEnv("STAR_HISTORY_BUILD_TIMEOUT_SECONDS", defaultStarHistoryBuildTimeout),
-		StarHistoryWorkers:      intEnv("STAR_HISTORY_WORKER_CONCURRENCY", defaultStarHistoryWorkers),
-		StarHistoryQueue:        intEnv("STAR_HISTORY_QUEUE_CAPACITY", defaultStarHistoryQueue),
-		StarHistoryMaxPoints:    intEnv("STAR_HISTORY_MAX_POINTS", defaultStarHistoryMaxPoints),
-		GCPProjectID:            stringEnv("GCP_PROJECT_ID", ""),
-		GCPCredentialsJSON:      stringEnv("GOOGLE_APPLICATION_CREDENTIALS_JSON", ""),
-		BigQueryMaxBytesBilled:  int64Env("BIGQUERY_MAX_BYTES_BILLED", 0),
-		StarHistoryDailyBudget:  int64Env("STAR_HISTORY_DAILY_MAX_BYTES_BILLED", 0),
+		Port:                    kitenv.OrDefault("PORT", defaultPort),
+		StoreFile:               kitenv.OrDefault("STORE_FILE", defaultStoreFile),
+		APIKeys:                 kitenv.LookupCSV("API_KEYS"),
+		AdminAPIKeys:            kitenv.LookupCSV("ADMIN_API_KEYS"),
+		GitHubTokens:            kitenv.LookupCSV("GITHUB_TOKENS"),
+		SyncEnabled:             kitenv.Bool("SYNC_ENABLED", defaultSyncEnabled),
+		SyncCron:                kitenv.OrDefault("SYNC_CRON", defaultSyncCron),
+		FullSyncCron:            kitenv.OrDefault("FULL_SYNC_CRON", defaultFullSyncCron),
+		CacheTTLSeconds:         kitenv.Int("CACHE_TTL_SECONDS", defaultCacheTTLSeconds),
+		MaxSearchCallsPerMinute: kitenv.Int("MAX_SEARCH_CALLS_PER_MINUTE", defaultMaxSearchCallsPerMinute),
+		RateLimitFloor:          kitenv.Int("RATE_LIMIT_FLOOR", defaultRateLimitFloor),
+		FeedTargetSize:          kitenv.Int("FEED_TARGET_SIZE", defaultFeedTargetSize),
+		StarHistoryEnabled:      kitenv.Bool("STAR_HISTORY_ENABLED", defaultStarHistoryEnabled),
+		StarHistoryCacheTTL:     kitenv.Int("STAR_HISTORY_CACHE_TTL_SECONDS", defaultStarHistoryCacheTTL),
+		StarHistoryNegativeTTL:  kitenv.Int("STAR_HISTORY_NEGATIVE_TTL_SECONDS", defaultStarHistoryNegativeTTL),
+		StarHistoryBuildTimeout: kitenv.Int("STAR_HISTORY_BUILD_TIMEOUT_SECONDS", defaultStarHistoryBuildTimeout),
+		StarHistoryWorkers:      kitenv.Int("STAR_HISTORY_WORKER_CONCURRENCY", defaultStarHistoryWorkers),
+		StarHistoryQueue:        kitenv.Int("STAR_HISTORY_QUEUE_CAPACITY", defaultStarHistoryQueue),
+		StarHistoryMaxPoints:    kitenv.Int("STAR_HISTORY_MAX_POINTS", defaultStarHistoryMaxPoints),
+		GCPProjectID:            kitenv.OrDefault("GCP_PROJECT_ID", ""),
+		GCPCredentialsJSON:      kitenv.OrDefault("GOOGLE_APPLICATION_CREDENTIALS_JSON", ""),
+		BigQueryMaxBytesBilled:  kitenv.Int64("BIGQUERY_MAX_BYTES_BILLED", 0),
+		StarHistoryDailyBudget:  kitenv.Int64("STAR_HISTORY_DAILY_MAX_BYTES_BILLED", 0),
 	}
 	if len(cfg.APIKeys) == 0 {
 		return Config{}, fmt.Errorf("API_KEYS env is required")
@@ -104,64 +104,4 @@ func Load() (Config, error) {
 		}
 	}
 	return cfg, nil
-}
-
-func stringEnv(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
-func listEnv(key string) []string {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	values := make([]string, 0, len(parts))
-	for _, part := range parts {
-		value := strings.TrimSpace(part)
-		if value != "" {
-			values = append(values, value)
-		}
-	}
-	return values
-}
-
-func boolEnv(key string, fallback bool) bool {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.ParseBool(raw)
-	if err != nil {
-		return fallback
-	}
-	return value
-}
-
-func intEnv(key string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
-}
-
-func int64Env(key string, fallback int64) int64 {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
 }

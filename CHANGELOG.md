@@ -6,6 +6,7 @@
 - 导出可装配 `server` 包；依赖 `starcat-api-kit`。
 - `GetRepository` 改走 kit `github.GetRepo`（Search / Releases 仍本地实现）。
 - `/api/v1/ping` 改用 kit `httputil.HandlePingV1`。
+- `config.Load` / FromEnv 链路改用 kit `env`。
 
 ## 0.1.0 - 2026-06-30
 
