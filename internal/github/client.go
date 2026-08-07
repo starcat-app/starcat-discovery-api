@@ -4,6 +4,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	kitgithub "github.com/starcat-app/starcat-api-kit/github"
 	"github.com/starcat-app/starcat-discovery-api/internal/tokenpool"
 )
 
@@ -100,13 +102,78 @@ func (c *Client) SearchRepositories(ctx context.Context, options RepositorySearc
 	return response.Items, nil
 }
 
-// GetRepository 拉取单仓库完整信息。
+// GetRepository 拉取单仓库完整信息（经 starcat-api-kit/github.GetRepo）。
+//
+// Search / Releases 仍走本地 get；本方法只收敛重复的 /repos/{full} 解码与重试。
 func (c *Client) GetRepository(ctx context.Context, fullName string) (Repository, error) {
-	var repo Repository
-	if err := c.get(ctx, "/repos/"+fullName, &repo); err != nil {
+	parts := strings.SplitN(fullName, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return Repository{}, fmt.Errorf("invalid repository full name %q", fullName)
+	}
+
+	kitClient := kitgithub.NewClient(kitgithub.Options{
+		BaseURL:    c.baseURL,
+		HTTPClient: c.httpClient,
+		Pool:       c.tokens,
+		UserAgent:  "starcat-discovery-api",
+		Timeout:    20 * time.Second,
+	})
+	repo, err := kitClient.GetRepo(ctx, parts[0], parts[1])
+	if err != nil {
+		path := "/repos/" + fullName
+		if errors.Is(err, kitgithub.ErrRepoNotFound) {
+			return Repository{}, &APIError{StatusCode: http.StatusNotFound, Path: path, Message: "Not Found"}
+		}
+		if errors.Is(err, kitgithub.ErrRateLimited) {
+			return Repository{}, &APIError{StatusCode: http.StatusTooManyRequests, Path: path, Message: "rate limited"}
+		}
+		var httpErr *kitgithub.HTTPError
+		if errors.As(err, &httpErr) {
+			return Repository{}, &APIError{StatusCode: httpErr.StatusCode, Path: path, Message: httpErr.Message}
+		}
 		return Repository{}, err
 	}
-	return repo, nil
+	return mapKitRepo(repo), nil
+}
+
+func mapKitRepo(r *kitgithub.Repo) Repository {
+	out := Repository{
+		ID:            r.ID,
+		Name:          r.Name,
+		FullName:      r.FullName,
+		Stargazers:    r.Stars,
+		Forks:         r.Forks,
+		Watchers:      r.Watchers,
+		Subscribers:   r.Subscribers,
+		OpenIssues:    r.OpenIssues,
+		DefaultBranch: r.DefaultBranch,
+		Topics:        r.Topics,
+		Archived:      r.Archived,
+		Fork:          r.Fork,
+		Private:       r.Private,
+		PushedAt:      r.PushedAt,
+		UpdatedAt:     r.UpdatedAt,
+		CreatedAt:     r.CreatedAt,
+		Owner: Owner{
+			Login: r.Owner,
+		},
+	}
+	if r.Description != nil {
+		out.Description = *r.Description
+	}
+	if r.Homepage != nil {
+		out.Homepage = *r.Homepage
+	}
+	if r.Language != nil {
+		out.Language = *r.Language
+	}
+	if r.OwnerAvatar != nil {
+		out.Owner.AvatarURL = *r.OwnerAvatar
+	}
+	if r.LicenseSpdx != nil {
+		out.License = &License{SPDXID: *r.LicenseSpdx}
+	}
+	return out
 }
 
 // ListReleases 拉取仓库最近 release。

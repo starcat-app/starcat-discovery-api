@@ -20,7 +20,12 @@ func TestHandlePingV1(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 	}
 
-	var env model.Envelope[pingResponse]
+	type pingData struct {
+		Service string `json:"service"`
+		Version string `json:"version"`
+		OK      bool   `json:"ok"`
+	}
+	var env model.Envelope[pingData]
 	if err := json.NewDecoder(rr.Body).Decode(&env); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

@@ -1,20 +1,13 @@
+// Package handler 的 ping 端点已收敛到 starcat-api-kit/httputil。
 package handler
 
-import "net/http"
+import (
+	"net/http"
 
-type pingResponse struct {
-	Service string `json:"service"`
-	Version string `json:"version"`
-	OK      bool   `json:"ok"`
-}
+	"github.com/starcat-app/starcat-api-kit/httputil"
+)
 
 // HandlePingV1 暴露 GET /api/v1/ping，用于 Starcat 设置页测试连接。
 func HandlePingV1(service, serviceVersion string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		WriteJSON(w, pingResponse{
-			Service: service,
-			Version: serviceVersion,
-			OK:      true,
-		})
-	}
+	return httputil.HandlePingV1(service, serviceVersion)
 }
