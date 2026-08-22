@@ -35,5 +35,8 @@ jobs:
         run: make deps
       - name: Run quality checks
         run: make check
+      # 宿主机编译不会应用 .dockerignore；必须构建真实镜像上下文，避免遗漏源码目录。
+      - name: Build Docker image
+        run: docker build --build-arg VERSION=0.0.0-ci --tag starcat-discovery-api:ci .
       - name: Build server
         run: make build
