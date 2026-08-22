@@ -28,10 +28,10 @@ const defaultPort = "5006"
 
 // Service 是已装配的 discovery HTTP 服务。
 type Service struct {
-	cfg               config.Config
-	handler           http.Handler
-	store             *store.SQLiteStore
-	scheduler         *scheduler.Scheduler
+	cfg                config.Config
+	handler            http.Handler
+	store              *store.SQLiteStore
+	scheduler          *scheduler.Scheduler
 	starHistoryService *starhistory.Service
 
 	closeOnce sync.Once
