@@ -35,13 +35,30 @@ type AwesomeSource struct {
 	UpdatedAt          time.Time           `json:"updated_at"`
 }
 
+// AwesomeSourceCard is the public source-catalog contract consumed by Starcat.
+type AwesomeSourceCard struct {
+	ID                 string     `json:"id"`
+	DisplayName        string     `json:"display_name"`
+	RepoFullName       string     `json:"repo_full_name"`
+	RepoURL            string     `json:"repo_url"`
+	ImageURL           string     `json:"image_url,omitempty"`
+	SummaryZH          string     `json:"summary_zh,omitempty"`
+	SummaryEN          string     `json:"summary_en,omitempty"`
+	Featured           bool       `json:"featured"`
+	SortOrder          int        `json:"sort_order"`
+	GitHubRepoCount    int        `json:"github_repo_count"`
+	ExternalEntryCount int        `json:"external_entry_count"`
+	LastSyncedAt       *time.Time `json:"last_synced_at,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
 // AwesomeEntry 是 README 中一条可审计的来源事实。
 //
 // 外部链接也持久化用于运营统计，但公共 entries API 只读取 GitHub Repo 条目。
 type AwesomeEntry struct {
-	SourceID         string   `json:"source_id,omitempty"`
-	TargetType       string   `json:"target_type,omitempty"`
-	TargetKey        string   `json:"target_key,omitempty"`
+	SourceID         string   `json:"-"`
+	TargetType       string   `json:"-"`
+	TargetKey        string   `json:"-"`
 	GhRepoID         *int64   `json:"gh_repo_id,omitempty"`
 	Owner            string   `json:"owner,omitempty"`
 	Name             string   `json:"name,omitempty"`
@@ -54,7 +71,7 @@ type AwesomeEntry struct {
 	EntryTitle       string   `json:"entry_title"`
 	EntryDescription string   `json:"entry_description,omitempty"`
 	SectionPath      []string `json:"section_path"`
-	RawURL           string   `json:"raw_url,omitempty"`
+	RawURL           string   `json:"-"`
 	SourceAnchorURL  string   `json:"source_anchor_url"`
 	EntryOrder       int      `json:"entry_order"`
 	FirstSeenSHA     string   `json:"-"`
@@ -80,6 +97,13 @@ type AwesomeSyncRun struct {
 
 // AwesomeEntriesSnapshot 是单一来源公开快照的响应主体。
 type AwesomeEntriesSnapshot struct {
-	Source  AwesomeSource  `json:"source"`
-	Entries []AwesomeEntry `json:"entries"`
+	Source  AwesomeEntriesSource `json:"source"`
+	Entries []AwesomeEntry       `json:"entries"`
+}
+
+// AwesomeEntriesSource keeps the entries response source header intentionally small.
+type AwesomeEntriesSource struct {
+	ID          string    `json:"id"`
+	DisplayName string    `json:"display_name"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

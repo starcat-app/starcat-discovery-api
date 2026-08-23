@@ -1,6 +1,7 @@
 package github
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,29 @@ import (
 
 	"github.com/starcat-app/starcat-discovery-api/internal/tokenpool"
 )
+
+func TestClientGetREADMEDecodesGitHubContent(t *testing.T) {
+	tokens := tokenpool.New([]string{"github_pat_token_one_123456"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/awesome/readme" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(readmeResponse{
+			Path: "README.md", SHA: "sha-1", HTMLURL: "https://github.com/acme/awesome/blob/main/README.md",
+			Encoding: "base64", Content: base64.StdEncoding.EncodeToString([]byte("# Awesome")),
+		})
+	}))
+	defer server.Close()
+	client := NewClient(tokens, 50).WithBaseURL(server.URL)
+	client.httpClient = server.Client()
+	readme, err := client.GetREADME(t.Context(), "acme/awesome")
+	if err != nil {
+		t.Fatalf("GetREADME() error = %v", err)
+	}
+	if string(readme.Content) != "# Awesome" || readme.SHA != "sha-1" || readme.Path != "README.md" {
+		t.Fatalf("README = %+v", readme)
+	}
+}
 
 func TestClientRetriesNextTokenOnRateLimit(t *testing.T) {
 	tokens := tokenpool.New([]string{"github_pat_token_one_123456", "github_pat_token_two_123456"})

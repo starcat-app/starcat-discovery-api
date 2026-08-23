@@ -3,6 +3,7 @@ package github
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,6 +135,34 @@ func (c *Client) GetRepository(ctx context.Context, fullName string) (Repository
 		return Repository{}, err
 	}
 	return mapKitRepo(repo), nil
+}
+
+// GetREADME 读取来源仓库默认分支 README 的内容与稳定 SHA。
+//
+// 这里只调用 GitHub Contents API，不跟随 README 中的任意 URL，避免把内容同步变成 SSRF 入口。
+func (c *Client) GetREADME(ctx context.Context, fullName string) (README, error) {
+	parts := strings.SplitN(fullName, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return README{}, fmt.Errorf("invalid repository full name %q", fullName)
+	}
+	var response readmeResponse
+	path := "/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/readme"
+	if err := c.get(ctx, path, &response); err != nil {
+		return README{}, err
+	}
+	if response.Encoding != "base64" || response.Content == "" {
+		return README{}, fmt.Errorf("github README encoding %q is unsupported", response.Encoding)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(response.Content, "\n", ""))
+	if err != nil {
+		return README{}, fmt.Errorf("decode GitHub README: %w", err)
+	}
+	return README{
+		Path:    response.Path,
+		SHA:     response.SHA,
+		HTMLURL: response.HTMLURL,
+		Content: decoded,
+	}, nil
 }
 
 func mapKitRepo(r *kitgithub.Repo) Repository {
@@ -347,6 +376,22 @@ func resetAt(resp *http.Response) time.Time {
 
 type searchResponse struct {
 	Items []Repository `json:"items"`
+}
+
+type readmeResponse struct {
+	Path     string `json:"path"`
+	SHA      string `json:"sha"`
+	HTMLURL  string `json:"html_url"`
+	Encoding string `json:"encoding"`
+	Content  string `json:"content"`
+}
+
+// README 是 Awesome 同步所需的 GitHub README 快照。
+type README struct {
+	Path    string
+	SHA     string
+	HTMLURL string
+	Content []byte
 }
 
 // Repository 是 GitHub repo API 的必要字段子集。

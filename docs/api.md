@@ -190,6 +190,66 @@ Starcat 本地优先缓存用的全量公开 catalog 快照。该接口不接收
 
 返回平台元数据。
 
+### `GET /api/v1/discovery/awesome/sources`
+
+返回已发布的 Starcat 精选 Awesome 来源目录，按 `sort_order ASC, id ASC` 排序。需要普通 API Key，不接受用户身份或订阅参数。
+
+响应字段包括稳定 `id`、`display_name`、canonical `repo_full_name` / `repo_url`、HTTPS `image_url`、中英文介绍、`featured`、排序、GitHub / 外部条目计数以及内容和同步时间。响应带 `ETag` 和 `Cache-Control`；`If-None-Match` 命中时直接返回 `304`，不附带 envelope。
+
+### `GET /api/v1/discovery/awesome/sources/{source_id}/entries`
+
+返回单一已发布来源的完整 GitHub Repo 快照。外部链接和 GitHub 非 Repo 链接不进入公共响应；每条 Repo 保留 README 原始标题、描述、章节路径、顺序和安全的来源锚点。响应带独立 `ETag`，来源不存在、未发布或从未形成可用快照时返回 `404 AWESOME_SOURCE_NOT_FOUND`。
+
+```json
+{
+  "schema_version": 1,
+  "data": {
+    "source": {
+      "id": "awesome-mac",
+      "display_name": "Awesome Mac",
+      "updated_at": "2026-08-24T08:00:00Z"
+    },
+    "entries": [
+      {
+        "gh_repo_id": 123456,
+        "owner": "example",
+        "name": "project",
+        "full_name": "example/project",
+        "entry_title": "Project",
+        "entry_description": "Original README description",
+        "section_path": ["Utilities", "File Transfer"],
+        "entry_order": 42,
+        "source_anchor_url": "https://github.com/example/awesome/blob/main/README.md#file-transfer"
+      }
+    ]
+  },
+  "meta": {"total": 1, "generated_at": "2026-08-24T08:00:00Z"}
+}
+```
+
+### Awesome Admin API
+
+以下接口全部要求 Admin API Key，不能使用普通 API Key：
+
+```text
+GET    /internal/discovery/awesome/sources
+POST   /internal/discovery/awesome/sources
+PATCH  /internal/discovery/awesome/sources/{source_id}
+POST   /internal/discovery/awesome/sources/{source_id}/sync
+POST   /internal/discovery/awesome/sources/{source_id}/publish
+POST   /internal/discovery/awesome/sources/{source_id}/archive
+GET    /internal/discovery/awesome/sources/{source_id}/sync-runs
+```
+
+- 创建时核验 kebab-case ID、HTTPS 图片、canonical GitHub Repo、公开未归档状态、默认分支和 README。
+- PATCH 必须提交当前 `revision`；旧 revision 返回 `409 AWESOME_SOURCE_CONFLICT`。
+- 状态机为 `draft -> ready -> published -> archived`；同步成功且至少存在一个 GitHub Repo 才能发布，已下架的成功快照可以重新发布。
+- 同一来源仅允许一个 `queued/running` run；重复触发复用 active run。任务状态持久化，管理页面关闭不会取消任务。
+- 成功同步在一个 SQLite 事务内 upsert Repo、替换来源关系、更新统计并完成 run；失败只记录脱敏错误，继续提供上次成功快照。
+- 常规 light sync cron 会刷新全部 published 来源；管理端也可手动触发。
+
+Awesome 稳定错误码：`AWESOME_SOURCE_INVALID`、`AWESOME_SOURCE_NOT_FOUND`、`AWESOME_SOURCE_CONFLICT`、`AWESOME_SOURCE_NOT_READY`、`AWESOME_README_UNSUPPORTED`、`GITHUB_RATE_LIMITED`、`AWESOME_SYNC_UNAVAILABLE`。
+
 ### `GET /api/v1/repos/{owner}/{repo}/star-history`
 
 返回公开仓库星标历史。需要普通 API key，且服务端必须已显式开启 `STAR_HISTORY_ENABLED`。

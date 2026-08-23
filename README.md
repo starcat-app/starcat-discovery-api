@@ -69,6 +69,7 @@ This service is independent of `starcat-trending-api`. The existing trending pip
 - Separate standard and admin API keys
 - SQLite persistence backed by a Fly.io volume
 - GitHub PAT pool for Search, repository, and release ingestion
+- Managed Awesome sources with GFM AST parsing, persisted sync runs, and independent ETag snapshots
 - Bounded asynchronous star-history workers with SQLite cache, ETag, and query budget guards
 - Open-source project files: README, LICENSE, CONTRIBUTING, SECURITY, Dockerfile, and Fly.io configuration
 
@@ -126,9 +127,15 @@ GET /api/v1/discovery/bulk
 GET /api/v1/discovery/languages
 GET /api/v1/discovery/topics
 GET /api/v1/discovery/platforms
+GET /api/v1/discovery/awesome/sources
+GET /api/v1/discovery/awesome/sources/{source_id}/entries
 GET /api/v1/repos/{owner}/{repo}/star-history?repo_id={id}&range=3m|1y|all
 GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
+GET|POST /internal/discovery/awesome/sources
+PATCH /internal/discovery/awesome/sources/{source_id}
+POST /internal/discovery/awesome/sources/{source_id}/sync|publish|archive
+GET /internal/discovery/awesome/sources/{source_id}/sync-runs
 ```
 
 `GET /api/v1/ping` returns the authenticated service identity and the build version injected from the release tag:
@@ -138,6 +145,8 @@ POST /internal/sync/discovery
 ```
 
 The discovery, popular, and new-release endpoints read precomputed results from SQLite. `/discovery/bulk` provides the complete public catalog snapshot required by Starcat's local-first cache. The admin sync endpoint triggers GitHub ingestion and rebuilds the rankings. Trending candidates remain available only through `/internal/discovery/trending-candidates`, which requires an Admin API Key. They are excluded from summary, bulk, and the Starcat UI. The client continues to use the existing `starcat-trending-api`.
+
+Awesome uses an independent source catalog and per-source entries snapshots; it is never merged into discovery bulk. Managed sources start as drafts, become ready after a successful sync with at least one public GitHub repository, and require an explicit publish action. Archive keeps the source and last successful snapshot. README content is parsed through a CommonMark/GFM AST; external links remain admin statistics and are not returned as repository entries. Published sources refresh with the regular light-sync cron and can also be synced individually.
 
 The star-history endpoint requires a stable GitHub `repo_id`. A cache hit returns `200` with `ETag` and `Cache-Control`; the first valid public-repository miss returns `202` plus `Retry-After: 5` while a bounded worker prepares the cache. The service rejects private repositories and verifies that the ID still matches `owner/repo`. See [`docs/api.md`](docs/api.md) for the complete response and error contract.
 

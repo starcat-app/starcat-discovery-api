@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/starcat-app/starcat-discovery-api/internal/awesome"
 	"github.com/starcat-app/starcat-discovery-api/internal/config"
 	"github.com/starcat-app/starcat-discovery-api/internal/github"
 	"github.com/starcat-app/starcat-discovery-api/internal/handler"
@@ -71,6 +72,9 @@ func New(cfg config.Config) (*Service, error) {
 	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
 	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
 	bulkCache := handler.NewBulkCache(time.Duration(cfg.CacheTTLSeconds) * time.Second)
+	awesomeService := awesome.NewService(sqliteStore, githubClient)
+	awesomeHandler := handler.NewAwesomeHandler(awesomeService)
+	awesomeAdminHandler := handler.NewAwesomeAdminHandler(awesomeService)
 
 	var starHistoryService *starhistory.Service
 	if cfg.StarHistoryEnabled {
@@ -115,7 +119,7 @@ func New(cfg config.Config) (*Service, error) {
 
 	var sch *scheduler.Scheduler
 	if cfg.SyncEnabled {
-		sch = scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache)
+		sch = scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache, awesomeService)
 		sch.Start()
 	}
 
@@ -130,12 +134,21 @@ func New(cfg config.Config) (*Service, error) {
 	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
 	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
 	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
+	mux.Handle("GET /api/v1/discovery/awesome/sources", apiAuth.Wrap(http.HandlerFunc(awesomeHandler.HandleSources)))
+	mux.Handle("GET /api/v1/discovery/awesome/sources/{source_id}/entries", apiAuth.Wrap(http.HandlerFunc(awesomeHandler.HandleEntries)))
 	mux.Handle(
 		"GET /api/v1/repos/{owner}/{repo}/star-history",
 		apiAuth.Wrap(http.HandlerFunc(starHistoryHandler.HandleStarHistory)),
 	)
 	mux.Handle("GET /internal/discovery/trending-candidates", adminAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
 	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService, bulkCache)))
+	mux.Handle("GET /internal/discovery/awesome/sources", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleList)))
+	mux.Handle("POST /internal/discovery/awesome/sources", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleCreate)))
+	mux.Handle("PATCH /internal/discovery/awesome/sources/{source_id}", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleUpdate)))
+	mux.Handle("POST /internal/discovery/awesome/sources/{source_id}/sync", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleSync)))
+	mux.Handle("POST /internal/discovery/awesome/sources/{source_id}/publish", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandlePublish)))
+	mux.Handle("POST /internal/discovery/awesome/sources/{source_id}/archive", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleArchive)))
+	mux.Handle("GET /internal/discovery/awesome/sources/{source_id}/sync-runs", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleSyncRuns)))
 
 	log.Printf("starcat-discovery-api %s endpoints ready", version.Version)
 

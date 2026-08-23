@@ -147,6 +147,22 @@ func (s *SQLiteStore) StartAwesomeSyncRun(ctx context.Context, run model.Awesome
 	return run, nil
 }
 
+// GetActiveAwesomeSyncRun returns the run reused by duplicate sync requests.
+func (s *SQLiteStore) GetActiveAwesomeSyncRun(ctx context.Context, sourceID string) (model.AwesomeSyncRun, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, source_id, status, trigger_kind, readme_sha, github_count, external_count,
+		       invalid_count, duplicate_count, error_code, error_message, started_at, finished_at
+		FROM awesome_sync_runs
+		WHERE source_id = ? AND status IN ('queued', 'running')
+		ORDER BY started_at DESC, rowid DESC LIMIT 1
+	`, sourceID)
+	run, err := scanAwesomeSyncRun(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AwesomeSyncRun{}, ErrAwesomeSourceNotFound
+	}
+	return run, err
+}
+
 // FinishAwesomeSyncRun 写入成功或失败统计；错误文本必须由 service 先脱敏和限长。
 func (s *SQLiteStore) FinishAwesomeSyncRun(ctx context.Context, run model.AwesomeSyncRun) error {
 	finishedAt := time.Now().UTC()
@@ -182,7 +198,7 @@ func (s *SQLiteStore) ListAwesomeSyncRuns(ctx context.Context, sourceID string, 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, source_id, status, trigger_kind, readme_sha, github_count, external_count,
 		       invalid_count, duplicate_count, error_code, error_message, started_at, finished_at
-		FROM awesome_sync_runs WHERE source_id = ? ORDER BY started_at DESC LIMIT ?
+		FROM awesome_sync_runs WHERE source_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?
 	`, sourceID, limit)
 	if err != nil {
 		return nil, err
@@ -197,6 +213,164 @@ func (s *SQLiteStore) ListAwesomeSyncRuns(ctx context.Context, sourceID string, 
 		result = append(result, run)
 	}
 	return result, rows.Err()
+}
+
+// ReplaceAwesomeSnapshot atomically publishes a fully verified source snapshot and completes its run.
+//
+// Old rows are marked inactive only after every GitHub repository and entry has been prepared. A parse or
+// GitHub failure therefore cannot erase the last public snapshot.
+func (s *SQLiteStore) ReplaceAwesomeSnapshot(
+	ctx context.Context,
+	sourceID, defaultBranch, readmePath, readmeSHA string,
+	repos []model.Repository,
+	entries []model.AwesomeEntry,
+	run model.AwesomeSyncRun,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	for _, repo := range repos {
+		if err := upsertAwesomeRepo(ctx, tx, repo, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE awesome_entries SET is_active = 0, updated_at = ? WHERE source_id = ?`, timeString(now), sourceID); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		sectionJSON, encodeErr := sectionPathJSON(entry.SectionPath)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO awesome_entries (
+				source_id, target_type, target_key, gh_repo_id, entry_title, entry_description,
+				section_path_json, raw_url, source_anchor_url, entry_order, is_active,
+				first_seen_sha, last_seen_sha, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+			ON CONFLICT(source_id, target_key) DO UPDATE SET
+				target_type = excluded.target_type,
+				gh_repo_id = excluded.gh_repo_id,
+				entry_title = excluded.entry_title,
+				entry_description = excluded.entry_description,
+				section_path_json = excluded.section_path_json,
+				raw_url = excluded.raw_url,
+				source_anchor_url = excluded.source_anchor_url,
+				entry_order = excluded.entry_order,
+				is_active = 1,
+				last_seen_sha = excluded.last_seen_sha,
+				updated_at = excluded.updated_at
+		`, sourceID, entry.TargetType, entry.TargetKey, entry.GhRepoID, entry.EntryTitle,
+			nullable(entry.EntryDescription), sectionJSON, entry.RawURL, entry.SourceAnchorURL,
+			entry.EntryOrder, readmeSHA, readmeSHA, timeString(now), timeString(now))
+		if err != nil {
+			return err
+		}
+	}
+	githubCount := 0
+	externalCount := 0
+	for _, entry := range entries {
+		if entry.TargetType == "github_repo" {
+			githubCount++
+		} else if entry.TargetType == "external" {
+			externalCount++
+		}
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE awesome_sources SET
+			status = CASE WHEN status = 'draft' THEN 'ready' ELSE status END,
+			default_branch = ?, readme_path = ?, last_successful_sha = ?,
+			github_repo_count = ?, external_entry_count = ?, last_synced_at = ?
+		WHERE id = ?
+	`, nullable(defaultBranch), nullable(readmePath), readmeSHA, githubCount, externalCount, timeString(now), sourceID)
+	if err != nil {
+		return err
+	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if rows == 0 {
+		return ErrAwesomeSourceNotFound
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE awesome_sync_runs SET
+			status = 'succeeded', readme_sha = ?, github_count = ?, external_count = ?,
+			invalid_count = ?, duplicate_count = ?, error_code = NULL, error_message = NULL, finished_at = ?
+		WHERE id = ?
+	`, readmeSHA, githubCount, externalCount, run.InvalidCount, run.DuplicateCount, timeString(now), run.ID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ListPublishedAwesomeEntries returns only verified GitHub Repo rows from a published source.
+func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID string) ([]model.AwesomeEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.source_id, e.target_type, e.target_key, e.gh_repo_id,
+		       r.owner, r.name, r.full_name, r.description, r.owner_avatar, r.language,
+		       r.stars, r.is_archived, e.entry_title, e.entry_description,
+		       e.section_path_json, e.raw_url, e.source_anchor_url, e.entry_order
+		FROM awesome_entries e
+		JOIN awesome_sources s ON s.id = e.source_id AND s.status = 'published'
+		JOIN repos r ON r.gh_repo_id = e.gh_repo_id
+		WHERE e.source_id = ? AND e.is_active = 1 AND e.target_type = 'github_repo'
+		ORDER BY e.entry_order ASC, e.target_key ASC
+	`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := make([]model.AwesomeEntry, 0)
+	for rows.Next() {
+		var entry model.AwesomeEntry
+		var repoID int64
+		var description, avatar, language, entryDescription sql.NullString
+		var archived int
+		var sectionJSON string
+		if err := rows.Scan(&entry.SourceID, &entry.TargetType, &entry.TargetKey, &repoID,
+			&entry.Owner, &entry.Name, &entry.FullName, &description, &avatar, &language,
+			&entry.Stars, &archived, &entry.EntryTitle, &entryDescription, &sectionJSON,
+			&entry.RawURL, &entry.SourceAnchorURL, &entry.EntryOrder); err != nil {
+			return nil, err
+		}
+		entry.GhRepoID = &repoID
+		entry.Description = description.String
+		entry.OwnerAvatar = avatar.String
+		entry.Language = language.String
+		entry.IsArchived = archived != 0
+		entry.EntryDescription = entryDescription.String
+		if err := json.Unmarshal([]byte(sectionJSON), &entry.SectionPath); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+func upsertAwesomeRepo(ctx context.Context, tx *sql.Tx, repo model.Repository, now time.Time) error {
+	if repo.GhRepoID <= 0 || repo.FullName == "" || repo.Owner == "" || repo.Name == "" {
+		return fmt.Errorf("invalid Awesome repository %q", repo.FullName)
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO repos (
+			gh_repo_id, owner, name, full_name, description, language, stars, forks, watchers,
+			subscribers, open_issues, owner_avatar, default_branch, topics_json, platforms_json,
+			is_archived, is_fork, indexed_at, enriched_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, ?, ?)
+		ON CONFLICT(gh_repo_id) DO UPDATE SET
+			owner = excluded.owner, name = excluded.name, full_name = excluded.full_name,
+			description = excluded.description, language = excluded.language, stars = excluded.stars,
+			forks = excluded.forks, watchers = excluded.watchers, subscribers = excluded.subscribers,
+			open_issues = excluded.open_issues, owner_avatar = excluded.owner_avatar,
+			default_branch = excluded.default_branch, is_archived = excluded.is_archived,
+			is_fork = excluded.is_fork, indexed_at = excluded.indexed_at, enriched_at = excluded.enriched_at
+	`, repo.GhRepoID, repo.Owner, repo.Name, repo.FullName, nullable(repo.Description), nullable(repo.Language),
+		repo.Stars, repo.Forks, repo.Watchers, repo.Subscribers, repo.OpenIssues, nullable(repo.OwnerAvatar),
+		nullable(repo.DefaultBranch), boolInt(repo.IsArchived), boolInt(repo.IsFork), timeString(now), timeString(now))
+	return err
 }
 
 const awesomeSourceSelect = `
