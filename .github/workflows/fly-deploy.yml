@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout tested commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # workflow_run 默认指向 main，必须固定到真正通过 CI 的提交。
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
