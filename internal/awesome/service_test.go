@@ -64,6 +64,9 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	if snapshot.Entries[0].UpdatedAt != "2026-08-23T12:34:56Z" {
 		t.Fatalf("published repository updated_at = %q", snapshot.Entries[0].UpdatedAt)
 	}
+	if ready.LastSyncedAt == nil || !snapshot.Source.UpdatedAt.Equal(*ready.LastSyncedAt) {
+		t.Fatalf("snapshot updated_at = %s, last_synced_at = %v", snapshot.Source.UpdatedAt, ready.LastSyncedAt)
+	}
 
 	fake.readme.SHA = "sha-2"
 	fake.readme.Content = []byte("- [Missing](https://github.com/example/missing)\n")

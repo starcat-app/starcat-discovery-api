@@ -150,8 +150,12 @@ func (s *Service) PublishedEntries(ctx context.Context, sourceID string) (model.
 	if err != nil {
 		return model.AwesomeEntriesSnapshot{}, err
 	}
+	snapshotUpdatedAt := source.UpdatedAt
+	if source.LastSyncedAt != nil {
+		snapshotUpdatedAt = *source.LastSyncedAt
+	}
 	return model.AwesomeEntriesSnapshot{
-		Source:  model.AwesomeEntriesSource{ID: source.ID, DisplayName: source.DisplayName, UpdatedAt: source.UpdatedAt},
+		Source:  model.AwesomeEntriesSource{ID: source.ID, DisplayName: source.DisplayName, UpdatedAt: snapshotUpdatedAt},
 		Entries: entries,
 	}, nil
 }
