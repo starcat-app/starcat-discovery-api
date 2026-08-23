@@ -325,8 +325,19 @@ func repositoryModel(repo gh.Repository, now time.Time) model.Repository {
 		Description: repo.Description, Language: repo.Language, Stars: repo.Stargazers,
 		Forks: repo.Forks, Watchers: repo.Watchers, Subscribers: repo.Subscribers,
 		OpenIssues: repo.OpenIssues, OwnerAvatar: repo.Owner.AvatarURL, DefaultBranch: repo.DefaultBranch,
+		UpdatedAt:  parseAwesomeTimePtr(repo.UpdatedAt),
 		IsArchived: repo.Archived, IsFork: repo.Fork, IndexedAt: now, EnrichedAt: &now,
 	}
+}
+
+// GitHub 时间缺失或格式异常时保留 nil，让 API 省略 updated_at；不能用同步时间冒充
+// 仓库更新时间，否则客户端“最近更新”排序会产生误导。
+func parseAwesomeTimePtr(raw string) *time.Time {
+	value, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil
+	}
+	return &value
 }
 
 func newRunID() string {

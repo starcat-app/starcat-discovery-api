@@ -311,7 +311,7 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT e.source_id, e.target_type, e.target_key, e.gh_repo_id,
 		       r.owner, r.name, r.full_name, r.description, r.owner_avatar, r.language,
-		       r.stars, r.is_archived, e.entry_title, e.entry_description,
+		       r.stars, r.is_archived, r.updated_at, e.entry_title, e.entry_description,
 		       e.section_path_json, e.raw_url, e.source_anchor_url, e.entry_order
 		FROM awesome_entries e
 		JOIN awesome_sources s ON s.id = e.source_id AND s.status = 'published'
@@ -327,12 +327,12 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 	for rows.Next() {
 		var entry model.AwesomeEntry
 		var repoID int64
-		var description, avatar, language, entryDescription sql.NullString
+		var description, avatar, language, repoUpdatedAt, entryDescription sql.NullString
 		var archived int
 		var sectionJSON string
 		if err := rows.Scan(&entry.SourceID, &entry.TargetType, &entry.TargetKey, &repoID,
 			&entry.Owner, &entry.Name, &entry.FullName, &description, &avatar, &language,
-			&entry.Stars, &archived, &entry.EntryTitle, &entryDescription, &sectionJSON,
+			&entry.Stars, &archived, &repoUpdatedAt, &entry.EntryTitle, &entryDescription, &sectionJSON,
 			&entry.RawURL, &entry.SourceAnchorURL, &entry.EntryOrder); err != nil {
 			return nil, err
 		}
@@ -341,6 +341,7 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 		entry.OwnerAvatar = avatar.String
 		entry.Language = language.String
 		entry.IsArchived = archived != 0
+		entry.UpdatedAt = repoUpdatedAt.String
 		entry.EntryDescription = entryDescription.String
 		if err := json.Unmarshal([]byte(sectionJSON), &entry.SectionPath); err != nil {
 			return nil, err
@@ -358,18 +359,20 @@ func upsertAwesomeRepo(ctx context.Context, tx *sql.Tx, repo model.Repository, n
 		INSERT INTO repos (
 			gh_repo_id, owner, name, full_name, description, language, stars, forks, watchers,
 			subscribers, open_issues, owner_avatar, default_branch, topics_json, platforms_json,
-			is_archived, is_fork, indexed_at, enriched_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, ?, ?)
+			updated_at, is_archived, is_fork, indexed_at, enriched_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, ?, ?, ?)
 		ON CONFLICT(gh_repo_id) DO UPDATE SET
 			owner = excluded.owner, name = excluded.name, full_name = excluded.full_name,
 			description = excluded.description, language = excluded.language, stars = excluded.stars,
 			forks = excluded.forks, watchers = excluded.watchers, subscribers = excluded.subscribers,
 			open_issues = excluded.open_issues, owner_avatar = excluded.owner_avatar,
-			default_branch = excluded.default_branch, is_archived = excluded.is_archived,
+			default_branch = excluded.default_branch, updated_at = excluded.updated_at,
+			is_archived = excluded.is_archived,
 			is_fork = excluded.is_fork, indexed_at = excluded.indexed_at, enriched_at = excluded.enriched_at
 	`, repo.GhRepoID, repo.Owner, repo.Name, repo.FullName, nullable(repo.Description), nullable(repo.Language),
 		repo.Stars, repo.Forks, repo.Watchers, repo.Subscribers, repo.OpenIssues, nullable(repo.OwnerAvatar),
-		nullable(repo.DefaultBranch), boolInt(repo.IsArchived), boolInt(repo.IsFork), timeString(now), timeString(now))
+		nullable(repo.DefaultBranch), timePtrString(repo.UpdatedAt), boolInt(repo.IsArchived), boolInt(repo.IsFork),
+		timeString(now), timeString(now))
 	return err
 }
 

@@ -19,8 +19,11 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	defer sqliteStore.Close()
 	fake := &fakeGitHubClient{
 		repos: map[string]gh.Repository{
-			"acme/awesome":  sourceRepository(),
-			"example/alpha": {ID: 2, FullName: "Example/Alpha", Name: "Alpha", DefaultBranch: "main", Owner: gh.Owner{Login: "Example"}, Stargazers: 42},
+			"acme/awesome": sourceRepository(),
+			"example/alpha": {
+				ID: 2, FullName: "Example/Alpha", Name: "Alpha", DefaultBranch: "main",
+				Owner: gh.Owner{Login: "Example"}, Stargazers: 42, UpdatedAt: "2026-08-23T12:34:56Z",
+			},
 		},
 		readme: gh.README{
 			Path: "README.md", SHA: "sha-1", HTMLURL: "https://github.com/acme/awesome/blob/main/README.md",
@@ -51,6 +54,9 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	snapshot, err := service.PublishedEntries(ctx, created.ID)
 	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].FullName != "Example/Alpha" {
 		t.Fatalf("published snapshot = %+v, %v", snapshot, err)
+	}
+	if snapshot.Entries[0].UpdatedAt != "2026-08-23T12:34:56Z" {
+		t.Fatalf("published repository updated_at = %q", snapshot.Entries[0].UpdatedAt)
 	}
 
 	fake.readme.SHA = "sha-2"
