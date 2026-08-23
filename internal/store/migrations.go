@@ -180,6 +180,76 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			repos_upserted INTEGER NOT NULL DEFAULT 0,
 			error_message   TEXT
 		);
+
+		CREATE TABLE IF NOT EXISTS awesome_sources (
+			id                    TEXT PRIMARY KEY,
+			repo_full_name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			display_name          TEXT NOT NULL,
+			image_url             TEXT,
+			summary_zh            TEXT,
+			summary_en            TEXT,
+			featured              INTEGER NOT NULL DEFAULT 0,
+			sort_order            INTEGER NOT NULL DEFAULT 0,
+			status                TEXT NOT NULL DEFAULT 'draft'
+				CHECK (status IN ('draft', 'ready', 'published', 'archived')),
+			revision              INTEGER NOT NULL DEFAULT 1,
+			default_branch        TEXT,
+			readme_path           TEXT,
+			last_successful_sha   TEXT,
+			github_repo_count     INTEGER NOT NULL DEFAULT 0,
+			external_entry_count  INTEGER NOT NULL DEFAULT 0,
+			last_synced_at        TEXT,
+			created_at            TEXT NOT NULL,
+			updated_at            TEXT NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_awesome_sources_public
+			ON awesome_sources(status, sort_order, id);
+
+		CREATE TABLE IF NOT EXISTS awesome_entries (
+			source_id            TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
+			target_type          TEXT NOT NULL CHECK (target_type IN ('github_repo', 'external')),
+			target_key           TEXT NOT NULL,
+			gh_repo_id           INTEGER REFERENCES repos(gh_repo_id) ON DELETE SET NULL,
+			entry_title          TEXT NOT NULL,
+			entry_description    TEXT,
+			section_path_json    TEXT NOT NULL DEFAULT '[]',
+			raw_url              TEXT NOT NULL,
+			source_anchor_url    TEXT NOT NULL,
+			entry_order          INTEGER NOT NULL,
+			is_active            INTEGER NOT NULL DEFAULT 1,
+			first_seen_sha       TEXT NOT NULL,
+			last_seen_sha        TEXT NOT NULL,
+			created_at           TEXT NOT NULL,
+			updated_at           TEXT NOT NULL,
+			PRIMARY KEY (source_id, target_key)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_awesome_entries_source_order
+			ON awesome_entries(source_id, is_active, entry_order, target_key);
+		CREATE INDEX IF NOT EXISTS idx_awesome_entries_repo
+			ON awesome_entries(gh_repo_id, source_id) WHERE gh_repo_id IS NOT NULL;
+
+		CREATE TABLE IF NOT EXISTS awesome_sync_runs (
+			id                   TEXT PRIMARY KEY,
+			source_id            TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
+			status               TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+			trigger_kind         TEXT NOT NULL CHECK (trigger_kind IN ('manual', 'scheduler')),
+			readme_sha           TEXT,
+			github_count         INTEGER NOT NULL DEFAULT 0,
+			external_count       INTEGER NOT NULL DEFAULT 0,
+			invalid_count        INTEGER NOT NULL DEFAULT 0,
+			duplicate_count      INTEGER NOT NULL DEFAULT 0,
+			error_code           TEXT,
+			error_message        TEXT,
+			started_at           TEXT NOT NULL,
+			finished_at          TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_awesome_sync_runs_source
+			ON awesome_sync_runs(source_id, started_at DESC);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_awesome_sync_runs_active
+			ON awesome_sync_runs(source_id) WHERE status IN ('queued', 'running');
 	`)
 	return err
 }
