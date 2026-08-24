@@ -6,9 +6,8 @@ import (
 	"log"
 )
 
-// createSchema 初始化 discovery catalog。
-//
-// 本项目尚未上线，schema 直接按当前设计创建，不保留旧字段兼容或迁移逻辑。
+// createSchema 初始化 discovery catalog；CREATE TABLE 负责新库，后续 ensure 方法负责
+// 已上线 volume 的追加列，禁止要求生产环境删除数据库重建。
 func createSchema(ctx context.Context, db *sql.DB) error {
 	log.Println("[migrate] create discovery schema")
 	_, err := db.ExecContext(ctx, `
@@ -206,6 +205,13 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 
 		CREATE INDEX IF NOT EXISTS idx_awesome_sources_public
 			ON awesome_sources(status, sort_order, id);
+
+		CREATE TABLE IF NOT EXISTS awesome_source_languages (
+			source_id TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
+			language  TEXT NOT NULL,
+			bytes     INTEGER NOT NULL CHECK (bytes >= 0),
+			PRIMARY KEY (source_id, language)
+		);
 
 		CREATE TABLE IF NOT EXISTS awesome_entries (
 			source_id            TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,

@@ -417,23 +417,53 @@ func upsertAwesomeRepo(ctx context.Context, tx *sql.Tx, repo model.Repository, n
 	return err
 }
 
+// ReplaceAwesomeSourceLanguages 原子替换来源仓库的 GitHub 语言字节分布。
+// 独立表避免给共享 repos 的固定列读取契约追加 UI 专用字段。
+func (s *SQLiteStore) ReplaceAwesomeSourceLanguages(ctx context.Context, sourceID string, languages map[string]int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM awesome_source_languages WHERE source_id = ?`, sourceID); err != nil {
+		return err
+	}
+	for language, bytes := range languages {
+		if strings.TrimSpace(language) == "" || bytes < 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO awesome_source_languages (source_id, language, bytes)
+			VALUES (?, ?, ?)
+		`, sourceID, language, bytes); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 const awesomeSourceSelect = `
-	SELECT id, repo_full_name, display_name, image_url, summary_zh, summary_en,
-	       featured, sort_order, status, revision, default_branch, readme_path,
-	       last_successful_sha,
+	SELECT awesome_sources.id, awesome_sources.repo_full_name, awesome_sources.display_name,
+	       awesome_sources.image_url, awesome_sources.summary_zh, awesome_sources.summary_en,
+	       awesome_sources.featured, awesome_sources.sort_order, awesome_sources.status,
+	       awesome_sources.revision, awesome_sources.default_branch, awesome_sources.readme_path,
+	       awesome_sources.last_successful_sha,
+	       COALESCE(repos.stars, 0) AS source_stars,
+	       COALESCE(repos.description, '') AS repo_description,
+	       COALESCE(repos.forks, 0) AS source_forks,
+	       COALESCE(repos.watchers, 0) AS source_watchers,
+	       COALESCE(repos.subscribers, 0) AS source_subscribers,
+	       COALESCE(repos.open_issues, 0) AS source_open_issues,
+	       COALESCE(repos.language, '') AS source_language,
 	       COALESCE((
-	           SELECT stars FROM repos
-	           WHERE full_name = awesome_sources.repo_full_name COLLATE NOCASE
-	           LIMIT 1
-	       ), 0) AS source_stars,
-	       COALESCE((
-	           SELECT description FROM repos
-	           WHERE full_name = awesome_sources.repo_full_name COLLATE NOCASE
-	           LIMIT 1
-	       ), '') AS repo_description,
-	       github_repo_count, external_entry_count,
-	       last_synced_at, created_at, updated_at
-	FROM awesome_sources`
+	           SELECT json_group_object(language, bytes)
+	           FROM awesome_source_languages
+	           WHERE source_id = awesome_sources.id
+	       ), '{}') AS language_bytes,
+	       awesome_sources.github_repo_count, awesome_sources.external_entry_count,
+	       awesome_sources.last_synced_at, awesome_sources.created_at, awesome_sources.updated_at
+	FROM awesome_sources
+	LEFT JOIN repos ON repos.full_name = awesome_sources.repo_full_name COLLATE NOCASE`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -443,11 +473,15 @@ func scanAwesomeSource(row rowScanner) (model.AwesomeSource, error) {
 	var source model.AwesomeSource
 	var imageURL, summaryZH, summaryEN, repoDescription, defaultBranch, readmePath, sha sql.NullString
 	var lastSyncedAt sql.NullString
+	var languageBytesJSON string
 	var featured int
 	var createdAt, updatedAt string
 	err := row.Scan(&source.ID, &source.RepoFullName, &source.DisplayName, &imageURL, &summaryZH, &summaryEN,
 		&featured, &source.SortOrder, &source.Status, &source.Revision, &defaultBranch, &readmePath,
-		&sha, &source.SourceStars, &repoDescription, &source.GitHubRepoCount, &source.ExternalEntryCount, &lastSyncedAt, &createdAt, &updatedAt)
+		&sha, &source.SourceStars, &repoDescription,
+		&source.SourceForks, &source.SourceWatchers, &source.SourceSubscribers, &source.SourceOpenIssues,
+		&source.SourceLanguage, &languageBytesJSON,
+		&source.GitHubRepoCount, &source.ExternalEntryCount, &lastSyncedAt, &createdAt, &updatedAt)
 	if err != nil {
 		return model.AwesomeSource{}, err
 	}
@@ -455,6 +489,9 @@ func scanAwesomeSource(row rowScanner) (model.AwesomeSource, error) {
 	source.SummaryZH = summaryZH.String
 	source.SummaryEN = summaryEN.String
 	source.RepoDescription = repoDescription.String
+	if err := json.Unmarshal([]byte(languageBytesJSON), &source.LanguageBytes); err != nil {
+		return model.AwesomeSource{}, fmt.Errorf("decode source repository languages: %w", err)
+	}
 	source.Featured = featured != 0
 	source.DefaultBranch = defaultBranch.String
 	source.ReadmePath = readmePath.String

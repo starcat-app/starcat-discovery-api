@@ -80,8 +80,12 @@ func sourceCard(source model.AwesomeSource) model.AwesomeSourceCard {
 		RepoURL: source.RepoURL, RepoDescription: source.RepoDescription,
 		ImageURL: source.ImageURL, SummaryZH: source.SummaryZH,
 		SummaryEN: source.SummaryEN, Featured: source.Featured, SortOrder: source.SortOrder,
-		SourceStars: source.SourceStars, GitHubRepoCount: source.GitHubRepoCount, ExternalEntryCount: source.ExternalEntryCount,
-		LastSyncedAt: source.LastSyncedAt, UpdatedAt: source.UpdatedAt,
+		SourceStars: source.SourceStars, SourceForks: source.SourceForks,
+		SourceWatchers: source.SourceWatchers, SourceSubscribers: source.SourceSubscribers,
+		SourceOpenIssues: source.SourceOpenIssues, SourceLanguage: source.SourceLanguage,
+		LanguageBytes: source.LanguageBytes, GitHubRepoCount: source.GitHubRepoCount,
+		ExternalEntryCount: source.ExternalEntryCount,
+		LastSyncedAt:       source.LastSyncedAt, UpdatedAt: source.UpdatedAt,
 	}
 }
 

@@ -30,6 +30,12 @@ type AwesomeSource struct {
 	ReadmePath         string              `json:"readme_path,omitempty"`
 	LastSuccessfulSHA  string              `json:"last_successful_sha,omitempty"`
 	SourceStars        int                 `json:"source_stars"`
+	SourceForks        int                 `json:"source_forks"`
+	SourceWatchers     int                 `json:"source_watchers"`
+	SourceSubscribers  int                 `json:"source_subscribers"`
+	SourceOpenIssues   int                 `json:"source_open_issues"`
+	SourceLanguage     string              `json:"source_language,omitempty"`
+	LanguageBytes      map[string]int      `json:"language_bytes,omitempty"`
 	GitHubRepoCount    int                 `json:"github_repo_count"`
 	ExternalEntryCount int                 `json:"external_entry_count"`
 	LastSyncedAt       *time.Time          `json:"last_synced_at,omitempty"`
@@ -39,21 +45,27 @@ type AwesomeSource struct {
 
 // AwesomeSourceCard is the public source-catalog contract consumed by Starcat.
 type AwesomeSourceCard struct {
-	ID                 string     `json:"id"`
-	DisplayName        string     `json:"display_name"`
-	RepoFullName       string     `json:"repo_full_name"`
-	RepoURL            string     `json:"repo_url"`
-	RepoDescription    string     `json:"repo_description,omitempty"`
-	ImageURL           string     `json:"image_url,omitempty"`
-	SummaryZH          string     `json:"summary_zh,omitempty"`
-	SummaryEN          string     `json:"summary_en,omitempty"`
-	Featured           bool       `json:"featured"`
-	SortOrder          int        `json:"sort_order"`
-	SourceStars        int        `json:"source_stars"`
-	GitHubRepoCount    int        `json:"github_repo_count"`
-	ExternalEntryCount int        `json:"external_entry_count"`
-	LastSyncedAt       *time.Time `json:"last_synced_at,omitempty"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                 string         `json:"id"`
+	DisplayName        string         `json:"display_name"`
+	RepoFullName       string         `json:"repo_full_name"`
+	RepoURL            string         `json:"repo_url"`
+	RepoDescription    string         `json:"repo_description,omitempty"`
+	ImageURL           string         `json:"image_url,omitempty"`
+	SummaryZH          string         `json:"summary_zh,omitempty"`
+	SummaryEN          string         `json:"summary_en,omitempty"`
+	Featured           bool           `json:"featured"`
+	SortOrder          int            `json:"sort_order"`
+	SourceStars        int            `json:"source_stars"`
+	SourceForks        int            `json:"source_forks"`
+	SourceWatchers     int            `json:"source_watchers"`
+	SourceSubscribers  int            `json:"source_subscribers"`
+	SourceOpenIssues   int            `json:"source_open_issues"`
+	SourceLanguage     string         `json:"source_language,omitempty"`
+	LanguageBytes      map[string]int `json:"language_bytes,omitempty"`
+	GitHubRepoCount    int            `json:"github_repo_count"`
+	ExternalEntryCount int            `json:"external_entry_count"`
+	LastSyncedAt       *time.Time     `json:"last_synced_at,omitempty"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 // AwesomeEntry 是 README 中一条可审计的来源事实。

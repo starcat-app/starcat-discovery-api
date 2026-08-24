@@ -74,3 +74,30 @@ func TestAwesomeRepositoryMetadataUpgradeInvalidatesLegacySHAOnce(t *testing.T) 
 		t.Fatalf("metadata upgrade repeated after restart: sha=%q", sha.String)
 	}
 }
+
+func TestAwesomeSourceLanguagesUpgradeRecreatesMissingTable(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-awesome-languages.db")
+	store, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("create baseline database: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE awesome_source_languages`); err != nil {
+		t.Fatalf("drop source languages table: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close baseline database: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("upgrade legacy database: %v", err)
+	}
+	defer reopened.Close()
+	var tableName string
+	if err := reopened.db.QueryRowContext(ctx, `
+		SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'awesome_source_languages'
+	`).Scan(&tableName); err != nil {
+		t.Fatalf("source languages table was not recreated: %v", err)
+	}
+}

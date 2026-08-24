@@ -36,6 +36,9 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 				Owner: gh.Owner{Login: "Example"}, Stargazers: 42, UpdatedAt: "2026-08-23T12:34:56Z",
 			},
 		},
+		languages: map[string]map[string]int{
+			"acme/awesome": {"Go": 9_000, "Shell": 1_000},
+		},
 		readme: gh.README{
 			Path: "README.md", SHA: "sha-1", HTMLURL: "https://github.com/acme/awesome/blob/main/README.md",
 			Content: []byte("## Tools\n\n- [Alpha](https://github.com/Example/Alpha) - Useful tool.\n- [Alias](https://github.com/alias/alpha) - Same GitHub ID.\n- [Site](https://example.com) - External.\n"),
@@ -59,6 +62,11 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	ready, err := sqliteStore.GetAwesomeSource(ctx, created.ID)
 	if err != nil || ready.Status != model.AwesomeSourceReady || ready.SourceStars != 321 || ready.GitHubRepoCount != 1 {
 		t.Fatalf("ready source = %+v, %v", ready, err)
+	}
+	if ready.RepoDescription != "Awesome source repository" || ready.SourceForks != 12 ||
+		ready.SourceWatchers != 321 || ready.SourceSubscribers != 34 || ready.SourceOpenIssues != 5 ||
+		ready.SourceLanguage != "Go" || ready.LanguageBytes["Go"] != 9_000 {
+		t.Fatalf("source repository metadata is incomplete: %+v", ready)
 	}
 	if _, err := service.PublishSource(ctx, created.ID); err != nil {
 		t.Fatalf("PublishSource() error = %v", err)
@@ -194,9 +202,10 @@ func TestServiceRecoversAfterGitHubTransientFailures(t *testing.T) {
 }
 
 type fakeGitHubClient struct {
-	repos  map[string]gh.Repository
-	errors map[string]error
-	readme gh.README
+	repos     map[string]gh.Repository
+	languages map[string]map[string]int
+	errors    map[string]error
+	readme    gh.README
 }
 
 type recordingAwesomeInvalidator struct {
@@ -222,10 +231,25 @@ func (f *fakeGitHubClient) GetRepository(_ context.Context, fullName string) (gh
 	return gh.Repository{}, &gh.APIError{StatusCode: 404, Path: "/repos/" + fullName, Message: "Not Found"}
 }
 
+func (f *fakeGitHubClient) GetRepositoryLanguages(_ context.Context, fullName string) (map[string]int, error) {
+	if err := f.errors[fullName+"/languages"]; err != nil {
+		return nil, err
+	}
+	if languages, ok := f.languages[fullName]; ok {
+		return languages, nil
+	}
+	return map[string]int{}, nil
+}
+
 func (f *fakeGitHubClient) GetREADME(_ context.Context, _ string) (gh.README, error) {
 	return f.readme, nil
 }
 
 func sourceRepository() gh.Repository {
-	return gh.Repository{ID: 1, FullName: "acme/awesome", Name: "awesome", DefaultBranch: "main", Stargazers: 321, Owner: gh.Owner{Login: "acme"}}
+	return gh.Repository{
+		ID: 1, FullName: "acme/awesome", Name: "awesome", DefaultBranch: "main",
+		Description: "Awesome source repository", Language: "Go",
+		Stargazers: 321, Forks: 12, Watchers: 321, Subscribers: 34, OpenIssues: 5,
+		Owner: gh.Owner{Login: "acme"},
+	}
 }
