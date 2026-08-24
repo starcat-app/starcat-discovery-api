@@ -194,11 +194,11 @@ Starcat 本地优先缓存用的全量公开 catalog 快照。该接口不接收
 
 返回已发布的 Starcat 精选 Awesome 来源目录，按 `sort_order ASC, id ASC` 排序。需要普通 API Key，不接受用户身份或订阅参数。
 
-响应字段包括稳定 `id`、`display_name`、canonical `repo_full_name` / `repo_url`、HTTPS `image_url`、中英文介绍、`featured`、排序、GitHub / 外部条目计数以及内容和同步时间。响应带 `ETag` 和 `Cache-Control`；`If-None-Match` 命中时直接返回 `304`，不附带 envelope。
+响应字段包括稳定 `id`、`display_name`、canonical `repo_full_name` / `repo_url`、HTTPS `image_url`、中英文介绍、`featured`、排序、来源仓库 `source_stars`、GitHub / 外部条目计数以及内容和同步时间。每轮来源同步都会更新来源仓库 GitHub 元数据，即使 README SHA 未变化也会刷新 Stars。响应带 `ETag` 和 `Cache-Control`；`If-None-Match` 命中时直接返回 `304`，不附带 envelope。
 
 ### `GET /api/v1/discovery/awesome/sources/{source_id}/entries`
 
-返回单一已发布来源的完整 GitHub Repo 快照。外部链接和 GitHub 非 Repo 链接不进入公共响应；每条 Repo 保留 README 原始标题、描述、章节路径、顺序和安全的来源锚点。响应带独立 `ETag`，来源不存在、未发布或从未形成可用快照时返回 `404 AWESOME_SOURCE_NOT_FOUND`。
+返回单一已发布来源的完整 GitHub Repo 快照。外部链接和 GitHub 非 Repo 链接不进入公共响应；每条 Repo 保留 README 原始标题、描述、章节路径、顺序和安全的来源锚点。`is_archived` 是必返布尔字段，`false` 不得省略。响应带独立 `ETag`，来源不存在、未发布或从未形成可用快照时返回 `404 AWESOME_SOURCE_NOT_FOUND`。
 
 ```json
 {
