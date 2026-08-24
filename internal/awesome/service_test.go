@@ -24,7 +24,12 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 			"acme/awesome": sourceRepository(),
 			"example/alpha": {
 				ID: 2, FullName: "Example/Alpha", Name: "Alpha", DefaultBranch: "main",
-				Owner: gh.Owner{Login: "Example"}, Stargazers: 42, UpdatedAt: "2026-08-23T12:34:56Z",
+				Owner:       gh.Owner{Login: "Example", AvatarURL: "https://avatars.example/alpha"},
+				Description: "Useful repository", Homepage: "https://alpha.example", Language: "Go",
+				Stargazers: 42, Forks: 7, Watchers: 8, Subscribers: 9, OpenIssues: 3,
+				Topics: []string{"awesome", "tooling"}, Fork: true,
+				License: &gh.License{SPDXID: "MIT"}, PushedAt: "2026-08-23T11:00:00Z",
+				UpdatedAt: "2026-08-23T12:34:56Z", CreatedAt: "2020-01-02T03:04:05Z",
 			},
 			"alias/alpha": {
 				ID: 2, FullName: "Example/Alpha", Name: "Alpha", DefaultBranch: "main",
@@ -64,6 +69,14 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	}
 	if snapshot.Entries[0].UpdatedAt != "2026-08-23T12:34:56Z" {
 		t.Fatalf("published repository updated_at = %q", snapshot.Entries[0].UpdatedAt)
+	}
+	entry := snapshot.Entries[0]
+	if entry.Forks != 7 || entry.Watchers != 8 || entry.Subscribers != 9 || entry.OpenIssues != 3 ||
+		entry.Homepage != "https://alpha.example" || entry.LicenseSpdx != "MIT" ||
+		entry.DefaultBranch != "main" || entry.PushedAt != "2026-08-23T11:00:00Z" ||
+		entry.CreatedAt != "2020-01-02T03:04:05Z" || !entry.IsFork ||
+		len(entry.Topics) != 2 || entry.Topics[0] != "awesome" {
+		t.Fatalf("published repository metadata is incomplete: %+v", entry)
 	}
 	if ready.LastSyncedAt == nil || !snapshot.Source.UpdatedAt.Equal(*ready.LastSyncedAt) {
 		t.Fatalf("snapshot updated_at = %s, last_synced_at = %v", snapshot.Source.UpdatedAt, ready.LastSyncedAt)

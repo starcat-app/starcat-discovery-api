@@ -328,8 +328,10 @@ func (s *SQLiteStore) UpsertAwesomeRepositories(ctx context.Context, repos []mod
 func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID string) ([]model.AwesomeEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT e.source_id, e.target_type, e.target_key, e.gh_repo_id,
-		       r.owner, r.name, r.full_name, r.description, r.owner_avatar, r.language,
-		       r.stars, r.is_archived, r.updated_at, e.entry_title, e.entry_description,
+		       r.owner, r.name, r.full_name, r.description, r.owner_avatar, r.homepage, r.language,
+		       r.stars, r.forks, r.watchers, r.subscribers, r.open_issues, r.default_branch,
+		       r.license_spdx, r.topics_json, r.is_archived, r.is_fork,
+		       r.pushed_at, r.updated_at, r.created_at, e.entry_title, e.entry_description,
 		       e.section_path_json, e.raw_url, e.source_anchor_url, e.entry_order
 		FROM awesome_entries e
 		JOIN awesome_sources s ON s.id = e.source_id AND s.status = 'published'
@@ -345,22 +347,34 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 	for rows.Next() {
 		var entry model.AwesomeEntry
 		var repoID int64
-		var description, avatar, language, repoUpdatedAt, entryDescription sql.NullString
-		var archived int
-		var sectionJSON string
+		var description, avatar, homepage, language, defaultBranch, licenseSpdx sql.NullString
+		var pushedAt, repoUpdatedAt, createdAt, entryDescription sql.NullString
+		var archived, fork int
+		var topicsJSON, sectionJSON string
 		if err := rows.Scan(&entry.SourceID, &entry.TargetType, &entry.TargetKey, &repoID,
-			&entry.Owner, &entry.Name, &entry.FullName, &description, &avatar, &language,
-			&entry.Stars, &archived, &repoUpdatedAt, &entry.EntryTitle, &entryDescription, &sectionJSON,
+			&entry.Owner, &entry.Name, &entry.FullName, &description, &avatar, &homepage, &language,
+			&entry.Stars, &entry.Forks, &entry.Watchers, &entry.Subscribers, &entry.OpenIssues, &defaultBranch,
+			&licenseSpdx, &topicsJSON, &archived, &fork, &pushedAt, &repoUpdatedAt, &createdAt,
+			&entry.EntryTitle, &entryDescription, &sectionJSON,
 			&entry.RawURL, &entry.SourceAnchorURL, &entry.EntryOrder); err != nil {
 			return nil, err
 		}
 		entry.GhRepoID = &repoID
 		entry.Description = description.String
 		entry.OwnerAvatar = avatar.String
+		entry.Homepage = homepage.String
 		entry.Language = language.String
+		entry.DefaultBranch = defaultBranch.String
+		entry.LicenseSpdx = licenseSpdx.String
 		entry.IsArchived = archived != 0
+		entry.IsFork = fork != 0
+		entry.PushedAt = pushedAt.String
 		entry.UpdatedAt = repoUpdatedAt.String
+		entry.CreatedAt = createdAt.String
 		entry.EntryDescription = entryDescription.String
+		if err := json.Unmarshal([]byte(topicsJSON), &entry.Topics); err != nil {
+			return nil, err
+		}
 		if err := json.Unmarshal([]byte(sectionJSON), &entry.SectionPath); err != nil {
 			return nil, err
 		}
@@ -373,23 +387,32 @@ func upsertAwesomeRepo(ctx context.Context, tx *sql.Tx, repo model.Repository, n
 	if repo.GhRepoID <= 0 || repo.FullName == "" || repo.Owner == "" || repo.Name == "" {
 		return fmt.Errorf("invalid Awesome repository %q", repo.FullName)
 	}
-	_, err := tx.ExecContext(ctx, `
+	topicsJSON, err := json.Marshal(repo.Topics)
+	if err != nil {
+		return fmt.Errorf("marshal Awesome repository topics: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO repos (
-			gh_repo_id, owner, name, full_name, description, language, stars, forks, watchers,
-			subscribers, open_issues, owner_avatar, default_branch, topics_json, platforms_json,
-			updated_at, is_archived, is_fork, indexed_at, enriched_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, ?, ?, ?)
+			gh_repo_id, owner, name, full_name, description, homepage, language, stars, forks, watchers,
+			subscribers, open_issues, owner_avatar, default_branch, license_spdx, topics_json, platforms_json,
+			pushed_at, updated_at, created_at, is_archived, is_fork, indexed_at, enriched_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(gh_repo_id) DO UPDATE SET
 			owner = excluded.owner, name = excluded.name, full_name = excluded.full_name,
-			description = excluded.description, language = excluded.language, stars = excluded.stars,
+			description = excluded.description, homepage = excluded.homepage,
+			language = excluded.language, stars = excluded.stars,
 			forks = excluded.forks, watchers = excluded.watchers, subscribers = excluded.subscribers,
 			open_issues = excluded.open_issues, owner_avatar = excluded.owner_avatar,
-			default_branch = excluded.default_branch, updated_at = excluded.updated_at,
+			default_branch = excluded.default_branch, license_spdx = excluded.license_spdx,
+			topics_json = excluded.topics_json, pushed_at = excluded.pushed_at,
+			updated_at = excluded.updated_at, created_at = excluded.created_at,
 			is_archived = excluded.is_archived,
 			is_fork = excluded.is_fork, indexed_at = excluded.indexed_at, enriched_at = excluded.enriched_at
-	`, repo.GhRepoID, repo.Owner, repo.Name, repo.FullName, nullable(repo.Description), nullable(repo.Language),
+	`, repo.GhRepoID, repo.Owner, repo.Name, repo.FullName, nullable(repo.Description), nullable(repo.Homepage), nullable(repo.Language),
 		repo.Stars, repo.Forks, repo.Watchers, repo.Subscribers, repo.OpenIssues, nullable(repo.OwnerAvatar),
-		nullable(repo.DefaultBranch), timePtrString(repo.UpdatedAt), boolInt(repo.IsArchived), boolInt(repo.IsFork),
+		nullable(repo.DefaultBranch), nullable(repo.LicenseSpdx), string(topicsJSON),
+		timePtrString(repo.PushedAt), timePtrString(repo.UpdatedAt), timePtrString(repo.CreatedAt),
+		boolInt(repo.IsArchived), boolInt(repo.IsFork),
 		timeString(now), timeString(now))
 	return err
 }

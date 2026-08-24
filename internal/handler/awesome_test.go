@@ -60,13 +60,14 @@ func TestAwesomeSourcesResponseCacheAvoidsRepeatedServiceReads(t *testing.T) {
 	}
 }
 
-func TestAwesomeEntriesAlwaysIncludeArchivedState(t *testing.T) {
+func TestAwesomeEntriesAlwaysIncludeRepositoryFacts(t *testing.T) {
 	updatedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	service := stubAwesomePublicService{snapshot: model.AwesomeEntriesSnapshot{
 		Source: model.AwesomeEntriesSource{ID: "awesome-mac", DisplayName: "Awesome Mac", UpdatedAt: updatedAt},
 		Entries: []model.AwesomeEntry{{
 			GhRepoID: ptr(int64(42)), FullName: "owner/repo", EntryTitle: "Repo",
-			SectionPath: []string{"Apps"}, SourceAnchorURL: "https://example.com#apps",
+			DefaultBranch: "main", UpdatedAt: "2026-08-24T00:00:00Z", CreatedAt: "2020-01-01T00:00:00Z",
+			Topics: []string{}, SectionPath: []string{"Apps"}, SourceAnchorURL: "https://example.com#apps",
 		}},
 	}}
 	handler := NewAwesomeHandler(service)
@@ -78,8 +79,14 @@ func TestAwesomeEntriesAlwaysIncludeArchivedState(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("response = %d, body=%q", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"is_archived":false`) {
-		t.Fatalf("is_archived=false must remain in the public contract: %s", response.Body.String())
+	for _, required := range []string{
+		`"stars":0`, `"forks":0`, `"watchers":0`, `"subscribers":0`, `"open_issues":0`,
+		`"default_branch":"main"`, `"topics":[]`, `"is_archived":false`, `"is_fork":false`,
+		`"updated_at":"2026-08-24T00:00:00Z"`, `"created_at":"2020-01-01T00:00:00Z"`,
+	} {
+		if !strings.Contains(response.Body.String(), required) {
+			t.Fatalf("repository fact %s must remain in the public contract: %s", required, response.Body.String())
+		}
 	}
 }
 

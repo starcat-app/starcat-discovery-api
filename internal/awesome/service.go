@@ -379,18 +379,23 @@ func validateSourceFields(source model.AwesomeSource, requireID bool) error {
 }
 
 func repositoryModel(repo gh.Repository, now time.Time) model.Repository {
+	licenseSpdx := ""
+	if repo.License != nil {
+		licenseSpdx = repo.License.SPDXID
+	}
 	return model.Repository{
 		GhRepoID: repo.ID, Owner: repo.Owner.Login, Name: repo.Name, FullName: repo.FullName,
-		Description: repo.Description, Language: repo.Language, Stars: repo.Stargazers,
+		Description: repo.Description, Homepage: repo.Homepage, Language: repo.Language, Stars: repo.Stargazers,
 		Forks: repo.Forks, Watchers: repo.Watchers, Subscribers: repo.Subscribers,
 		OpenIssues: repo.OpenIssues, OwnerAvatar: repo.Owner.AvatarURL, DefaultBranch: repo.DefaultBranch,
-		UpdatedAt:  parseAwesomeTimePtr(repo.UpdatedAt),
+		LicenseSpdx: licenseSpdx, Topics: repo.Topics, PushedAt: parseAwesomeTimePtr(repo.PushedAt),
+		UpdatedAt: parseAwesomeTimePtr(repo.UpdatedAt), CreatedAt: parseAwesomeTimePtr(repo.CreatedAt),
 		IsArchived: repo.Archived, IsFork: repo.Fork, IndexedAt: now, EnrichedAt: &now,
 	}
 }
 
-// GitHub 时间缺失或格式异常时保留 nil，让 API 省略 updated_at；不能用同步时间冒充
-// 仓库更新时间，否则客户端“最近更新”排序会产生误导。
+// GitHub 时间缺失或格式异常时保留 nil 并写入 NULL；不能用同步时间冒充仓库时间，
+// 否则客户端“最近更新”排序和详情事实都会产生误导。
 func parseAwesomeTimePtr(raw string) *time.Time {
 	value, err := time.Parse(time.RFC3339, raw)
 	if err != nil {

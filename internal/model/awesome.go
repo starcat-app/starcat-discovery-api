@@ -67,10 +67,21 @@ type AwesomeEntry struct {
 	FullName         string   `json:"full_name,omitempty"`
 	Description      string   `json:"description,omitempty"`
 	OwnerAvatar      string   `json:"owner_avatar,omitempty"`
+	Homepage         string   `json:"homepage,omitempty"`
 	Language         string   `json:"language,omitempty"`
-	Stars            int      `json:"stars,omitempty"`
+	Stars            int      `json:"stars"`
+	Forks            int      `json:"forks"`
+	Watchers         int      `json:"watchers"`
+	Subscribers      int      `json:"subscribers"`
+	OpenIssues       int      `json:"open_issues"`
+	DefaultBranch    string   `json:"default_branch"`
+	LicenseSpdx      string   `json:"license_spdx,omitempty"`
+	Topics           []string `json:"topics"`
 	IsArchived       bool     `json:"is_archived"`
-	UpdatedAt        string   `json:"updated_at,omitempty"`
+	IsFork           bool     `json:"is_fork"`
+	PushedAt         string   `json:"pushed_at,omitempty"`
+	UpdatedAt        string   `json:"updated_at"`
+	CreatedAt        string   `json:"created_at"`
 	EntryTitle       string   `json:"entry_title"`
 	EntryDescription string   `json:"entry_description,omitempty"`
 	SectionPath      []string `json:"section_path"`
