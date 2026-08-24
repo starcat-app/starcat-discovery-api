@@ -95,7 +95,7 @@ go run ./cmd/server/
 | `SYNC_ENABLED` | 否 | `true` | 是否启动定时同步 |
 | `SYNC_CRON` | 否 | `17 */3 * * *` | 轻同步 cron |
 | `FULL_SYNC_CRON` | 否 | `23 2 * * *` | 全量同步 cron |
-| `CACHE_TTL_SECONDS` | 否 | `10800` | `/discovery/bulk` 进程内缓存 TTL |
+| `CACHE_TTL_SECONDS` | 否 | `10800` | `/discovery/bulk` 与 Awesome 公共响应的进程内缓存 TTL |
 | `FEED_TARGET_SIZE` | 否 | `500` | 每轮 GitHub Search 的全局候选预算，服务端最高限制为 `1600` |
 | `STAR_HISTORY_ENABLED` | 否 | `false` | 是否开启 GH Archive / BigQuery 星标历史 Provider |
 | `STAR_HISTORY_CACHE_TTL_SECONDS` | 否 | `86400` | 成功历史缓存 TTL |
@@ -146,7 +146,7 @@ GET /internal/discovery/awesome/sources/{source_id}/sync-runs
 
 发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势候选只保留在 `/internal/discovery/trending-candidates`，需要 Admin API Key，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
 
-Awesome 使用独立来源目录和单来源 entries 快照，不并入 discovery bulk。运营来源先创建为草稿，成功同步至少一个公开 GitHub Repo 后进入 ready，再显式发布；下架保留来源和最近成功快照。README 通过 CommonMark/GFM AST 解析，外部链接只保留运营统计，不进入客户端 Repo 列表。发布来源随常规轻同步 cron 刷新，管理端也可单独触发。
+Awesome 使用独立来源目录和单来源 entries 快照，不并入 discovery bulk。运营来源先创建为草稿，成功同步至少一个公开 GitHub Repo 后进入 ready，再显式发布；下架保留来源和最近成功快照。README 通过 CommonMark/GFM AST 解析，外部链接只保留运营统计，不进入客户端 Repo 列表。发布来源随常规轻同步 cron 刷新，管理端也可单独触发。SQLite 持久快照可跨进程重启复用；公共 Awesome 响应另使用有界进程内 LRU 复用已编码 JSON、gzip 和 ETag，最多 64 条 / 64 MiB，同 key 并发 miss 只构建一次，来源变更时精确失效。
 
 星标历史接口必填稳定 GitHub `repo_id`。缓存命中返回带 `ETag` 和 `Cache-Control` 的 `200`；公开仓库首次 miss 经 ID 与 owner/name 校验后返回 `202 + Retry-After: 5`，由有界 worker 异步构建。私有仓库会被拒绝。完整响应和错误契约见 [`docs/api.md`](docs/api.md)。
 

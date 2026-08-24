@@ -196,6 +196,8 @@ Starcat 本地优先缓存用的全量公开 catalog 快照。该接口不接收
 
 响应字段包括稳定 `id`、`display_name`、canonical `repo_full_name` / `repo_url`、HTTPS `image_url`、中英文介绍、`featured`、排序、来源仓库 `source_stars`、GitHub / 外部条目计数以及内容和同步时间。每轮来源同步都会更新来源仓库 GitHub 元数据，即使 README SHA 未变化也会刷新 Stars。响应带 `ETag` 和 `Cache-Control`；`If-None-Match` 命中时直接返回 `304`，不附带 envelope。
 
+来源目录与单来源 entries 都以 SQLite 快照作为可跨重启复用的持久缓存，并额外使用进程内响应缓存复用已编码 JSON、gzip 和 ETag。该缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 10800 秒；采用 64 条 / 64 MiB 双上限 LRU，同 key 并发 miss 只重建一次，来源 CRUD、同步、发布和下架会精确失效相关 key。公开响应的 `Cache-Control` 为 5 分钟，进程重启只会丢失加速层，不会丢失 Awesome 快照。
+
 ### `GET /api/v1/discovery/awesome/sources/{source_id}/entries`
 
 返回单一已发布来源的完整 GitHub Repo 快照。外部链接和 GitHub 非 Repo 链接不进入公共响应；每条 Repo 保留 README 原始标题、描述、章节路径、顺序和安全的来源锚点。`is_archived` 是必返布尔字段，`false` 不得省略。响应带独立 `ETag`，来源不存在、未发布或从未形成可用快照时返回 `404 AWESOME_SOURCE_NOT_FOUND`。
