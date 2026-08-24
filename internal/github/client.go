@@ -137,6 +137,24 @@ func (c *Client) GetRepository(ctx context.Context, fullName string) (Repository
 	return mapKitRepo(repo), nil
 }
 
+// GetRepositoryLanguages 返回 GitHub 按代码字节数统计的语言分布。
+//
+// Repository API 的 language 只有单一主要语言，无法生成来源卡片中的多段色条；这里
+// 保留 GitHub 原始字节数，由客户端按降序计算比例，避免服务端和客户端各自维护舍入口径。
+func (c *Client) GetRepositoryLanguages(ctx context.Context, fullName string) (map[string]int, error) {
+	parts := strings.SplitN(fullName, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, fmt.Errorf("invalid repository full name %q", fullName)
+	}
+
+	languages := make(map[string]int)
+	path := "/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/languages"
+	if err := c.get(ctx, path, &languages); err != nil {
+		return nil, err
+	}
+	return languages, nil
+}
+
 // GetREADME 读取来源仓库默认分支 README 的内容与稳定 SHA。
 //
 // 这里只调用 GitHub Contents API，不跟随 README 中的任意 URL，避免把内容同步变成 SSRF 入口。
