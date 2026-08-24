@@ -196,6 +196,7 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			default_branch        TEXT,
 			readme_path           TEXT,
 			last_successful_sha   TEXT,
+			repo_metadata_version INTEGER NOT NULL DEFAULT 1,
 			github_repo_count     INTEGER NOT NULL DEFAULT 0,
 			external_entry_count  INTEGER NOT NULL DEFAULT 0,
 			last_synced_at        TEXT,
@@ -251,5 +252,53 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_awesome_sync_runs_active
 			ON awesome_sync_runs(source_id) WHERE status IN ('queued', 'running');
 	`)
+	if err != nil {
+		return err
+	}
+	return ensureAwesomeRepositoryMetadataVersion(ctx, db)
+}
+
+const awesomeRepositoryMetadataVersion = 1
+
+// ensureAwesomeRepositoryMetadataVersion 只让旧 Awesome 快照重建一次。
+//
+// 新增的仓库事实来自 GitHub API，但历史来源在 README SHA 未变化时会走 no-op。
+// 这里用持久版本标记清空一次旧 SHA，让既有发布来源在下一轮同步完整 enrich；版本写入后，
+// 后续进程重启不会再次清空 SHA，也不会破坏正常的远端与本地缓存命中。
+func ensureAwesomeRepositoryMetadataVersion(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(awesome_sources)`)
+	if err != nil {
+		return err
+	}
+	hasVersionColumn := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "repo_metadata_version" {
+			hasVersionColumn = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !hasVersionColumn {
+		if _, err := db.ExecContext(ctx, `
+			ALTER TABLE awesome_sources
+			ADD COLUMN repo_metadata_version INTEGER NOT NULL DEFAULT 0
+		`); err != nil {
+			return err
+		}
+	}
+	_, err = db.ExecContext(ctx, `
+		UPDATE awesome_sources
+		SET last_successful_sha = NULL,
+		    repo_metadata_version = ?
+		WHERE repo_metadata_version < ?
+	`, awesomeRepositoryMetadataVersion, awesomeRepositoryMetadataVersion)
 	return err
 }
