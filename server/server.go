@@ -72,8 +72,14 @@ func New(cfg config.Config) (*Service, error) {
 	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
 	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
 	bulkCache := handler.NewBulkCache(time.Duration(cfg.CacheTTLSeconds) * time.Second)
-	awesomeService := awesome.NewService(sqliteStore, githubClient)
-	awesomeHandler := handler.NewAwesomeHandler(awesomeService)
+	// Awesome 复用现有 CACHE_TTL_SECONDS 运维入口，并用独立容量上限保护进程内存。
+	awesomeCache := handler.NewAwesomeResponseCache(
+		time.Duration(cfg.CacheTTLSeconds)*time.Second,
+		64,
+		64<<20,
+	)
+	awesomeService := awesome.NewService(sqliteStore, githubClient, awesomeCache)
+	awesomeHandler := handler.NewAwesomeHandler(awesomeService, awesomeCache)
 	awesomeAdminHandler := handler.NewAwesomeAdminHandler(awesomeService)
 
 	var starHistoryService *starhistory.Service

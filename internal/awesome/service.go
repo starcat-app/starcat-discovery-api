@@ -53,14 +53,28 @@ func (e *ServiceError) Error() string { return e.Message }
 
 // Service coordinates managed source validation, state transitions and transactional sync.
 type Service struct {
-	store  Store
-	github GitHubClient
-	now    func() time.Time
+	store        Store
+	github       GitHubClient
+	invalidation ResponseCacheInvalidator
+	now          func() time.Time
+}
+
+// ResponseCacheInvalidator 让写路径只声明业务数据已变化，不依赖具体 HTTP 缓存实现。
+type ResponseCacheInvalidator interface {
+	InvalidateAwesomeCatalog()
+	InvalidateAwesomeSource(sourceID string)
 }
 
 // NewService creates the managed Awesome application service.
-func NewService(store Store, github GitHubClient) *Service {
-	return &Service{store: store, github: github, now: func() time.Time { return time.Now().UTC() }}
+func NewService(store Store, github GitHubClient, invalidators ...ResponseCacheInvalidator) *Service {
+	var invalidation ResponseCacheInvalidator
+	if len(invalidators) > 0 {
+		invalidation = invalidators[0]
+	}
+	return &Service{
+		store: store, github: github, invalidation: invalidation,
+		now: func() time.Time { return time.Now().UTC() },
+	}
 }
 
 // CreateSource validates the public GitHub source before persisting a draft.
@@ -81,7 +95,11 @@ func (s *Service) CreateSource(ctx context.Context, source model.AwesomeSource) 
 	}
 	source.RepoFullName = repo.FullName
 	created, err := s.store.CreateAwesomeSource(ctx, source)
-	return created, mapStoreError(err)
+	if err != nil {
+		return model.AwesomeSource{}, mapStoreError(err)
+	}
+	s.invalidateCatalog()
+	return created, nil
 }
 
 // UpdateSource applies optimistic concurrency and prevents a published ID from being rebound.
@@ -116,7 +134,12 @@ func (s *Service) UpdateSource(ctx context.Context, source model.AwesomeSource, 
 		source.RepoFullName = current.RepoFullName
 	}
 	updated, err := s.store.UpdateAwesomeSource(ctx, source, expectedRevision)
-	return updated, mapStoreError(err)
+	if err != nil {
+		return model.AwesomeSource{}, mapStoreError(err)
+	}
+	s.invalidateCatalog()
+	s.invalidateSource(source.ID)
+	return updated, nil
 }
 
 func (s *Service) ListSources(ctx context.Context) ([]model.AwesomeSource, error) {
@@ -190,8 +213,12 @@ func (s *Service) SyncSource(ctx context.Context, sourceID, trigger string) (mod
 		run.Status = "failed"
 		run.ErrorCode, run.ErrorMessage = syncFailure(syncErr)
 		_ = s.store.FinishAwesomeSyncRun(context.Background(), run)
+		// 来源仓库 Stars 可能已经在 README 读取失败前写入共享 repos。
+		s.invalidateCatalog()
 		return run, syncErr
 	}
+	s.invalidateCatalog()
+	s.invalidateSource(sourceID)
 	return result, nil
 }
 
@@ -287,12 +314,34 @@ func (s *Service) PublishSource(ctx context.Context, sourceID string) (model.Awe
 		return model.AwesomeSource{}, conflict("AWESOME_SOURCE_NOT_READY", "来源尚未通过成功同步")
 	}
 	updated, err := s.store.SetAwesomeSourceStatus(ctx, sourceID, model.AwesomeSourcePublished)
-	return updated, mapStoreError(err)
+	if err != nil {
+		return model.AwesomeSource{}, mapStoreError(err)
+	}
+	s.invalidateCatalog()
+	s.invalidateSource(sourceID)
+	return updated, nil
 }
 
 func (s *Service) ArchiveSource(ctx context.Context, sourceID string) (model.AwesomeSource, error) {
 	updated, err := s.store.SetAwesomeSourceStatus(ctx, sourceID, model.AwesomeSourceArchived)
-	return updated, mapStoreError(err)
+	if err != nil {
+		return model.AwesomeSource{}, mapStoreError(err)
+	}
+	s.invalidateCatalog()
+	s.invalidateSource(sourceID)
+	return updated, nil
+}
+
+func (s *Service) invalidateCatalog() {
+	if s.invalidation != nil {
+		s.invalidation.InvalidateAwesomeCatalog()
+	}
+}
+
+func (s *Service) invalidateSource(sourceID string) {
+	if s.invalidation != nil {
+		s.invalidation.InvalidateAwesomeSource(sourceID)
+	}
 }
 
 func (s *Service) SyncRuns(ctx context.Context, sourceID string) ([]model.AwesomeSyncRun, error) {

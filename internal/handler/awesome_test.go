@@ -35,6 +35,31 @@ func TestAwesomeSourcesETagReturns304(t *testing.T) {
 	}
 }
 
+func TestAwesomeSourcesResponseCacheAvoidsRepeatedServiceReads(t *testing.T) {
+	service := &countingAwesomePublicService{sources: []model.AwesomeSource{{
+		ID: "awesome-test", DisplayName: "Awesome Test", RepoFullName: "owner/repo",
+		RepoURL: "https://github.com/owner/repo", Status: model.AwesomeSourcePublished,
+		UpdatedAt: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+	}}}
+	cache := NewAwesomeResponseCache(time.Hour, 8, 1<<20)
+	handler := NewAwesomeHandler(service, cache)
+
+	first := httptest.NewRecorder()
+	handler.HandleSources(first, httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources", nil))
+	second := httptest.NewRecorder()
+	handler.HandleSources(second, httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources", nil))
+	if first.Code != http.StatusOK || second.Code != http.StatusOK || service.sourceCalls != 1 {
+		t.Fatalf("cached sources responses=%d/%d serviceCalls=%d", first.Code, second.Code, service.sourceCalls)
+	}
+
+	cache.InvalidateAwesomeCatalog()
+	third := httptest.NewRecorder()
+	handler.HandleSources(third, httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources", nil))
+	if third.Code != http.StatusOK || service.sourceCalls != 2 {
+		t.Fatalf("invalidated sources response=%d serviceCalls=%d", third.Code, service.sourceCalls)
+	}
+}
+
 func TestAwesomeEntriesAlwaysIncludeArchivedState(t *testing.T) {
 	updatedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	service := stubAwesomePublicService{snapshot: model.AwesomeEntriesSnapshot{
@@ -61,6 +86,20 @@ func TestAwesomeEntriesAlwaysIncludeArchivedState(t *testing.T) {
 type stubAwesomePublicService struct {
 	sources  []model.AwesomeSource
 	snapshot model.AwesomeEntriesSnapshot
+}
+
+type countingAwesomePublicService struct {
+	sources     []model.AwesomeSource
+	sourceCalls int
+}
+
+func (s *countingAwesomePublicService) ListPublishedSources(context.Context) ([]model.AwesomeSource, error) {
+	s.sourceCalls++
+	return s.sources, nil
+}
+
+func (s *countingAwesomePublicService) PublishedEntries(context.Context, string) (model.AwesomeEntriesSnapshot, error) {
+	return model.AwesomeEntriesSnapshot{}, nil
 }
 
 func (s stubAwesomePublicService) ListPublishedSources(context.Context) ([]model.AwesomeSource, error) {

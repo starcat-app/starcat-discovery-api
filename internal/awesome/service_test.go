@@ -36,7 +36,8 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 			Content: []byte("## Tools\n\n- [Alpha](https://github.com/Example/Alpha) - Useful tool.\n- [Alias](https://github.com/alias/alpha) - Same GitHub ID.\n- [Site](https://example.com) - External.\n"),
 		},
 	}
-	service := NewService(sqliteStore, fake)
+	invalidation := &recordingAwesomeInvalidator{}
+	service := NewService(sqliteStore, fake, invalidation)
 	created, err := service.CreateSource(ctx, model.AwesomeSource{
 		ID: "awesome-test", RepoFullName: "acme/awesome", DisplayName: "Awesome Test",
 	})
@@ -97,6 +98,9 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	}
 	if sources, err := service.ListPublishedSources(ctx); err != nil || len(sources) != 0 {
 		t.Fatalf("archived public sources = %+v, %v", sources, err)
+	}
+	if invalidation.catalogCount < 6 || len(invalidation.sourceIDs) < 4 {
+		t.Fatalf("response cache invalidations = catalog:%d sources:%v", invalidation.catalogCount, invalidation.sourceIDs)
 	}
 }
 
@@ -180,6 +184,19 @@ type fakeGitHubClient struct {
 	repos  map[string]gh.Repository
 	errors map[string]error
 	readme gh.README
+}
+
+type recordingAwesomeInvalidator struct {
+	catalogCount int
+	sourceIDs    []string
+}
+
+func (r *recordingAwesomeInvalidator) InvalidateAwesomeCatalog() {
+	r.catalogCount++
+}
+
+func (r *recordingAwesomeInvalidator) InvalidateAwesomeSource(sourceID string) {
+	r.sourceIDs = append(r.sourceIDs, sourceID)
 }
 
 func (f *fakeGitHubClient) GetRepository(_ context.Context, fullName string) (gh.Repository, error) {
