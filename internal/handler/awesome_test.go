@@ -71,6 +71,24 @@ func TestAwesomeSourcesResponseCacheAvoidsRepeatedServiceReads(t *testing.T) {
 	}
 }
 
+func TestAwesomeSourcesAlwaysIncludeEmptyLanguageBytes(t *testing.T) {
+	service := stubAwesomePublicService{sources: []model.AwesomeSource{{
+		ID: "awesome-test", DisplayName: "Awesome Test", RepoFullName: "owner/repo",
+		RepoURL: "https://github.com/owner/repo", Status: model.AwesomeSourcePublished,
+		UpdatedAt: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+	}}}
+	handler := NewAwesomeHandler(service)
+	response := httptest.NewRecorder()
+	handler.HandleSources(response, httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d, body=%q", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"language_bytes":{}`) {
+		t.Fatalf("empty language bytes must remain an object in the public contract: %s", response.Body.String())
+	}
+}
+
 func TestAwesomeEntriesAlwaysIncludeRepositoryFacts(t *testing.T) {
 	updatedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	service := stubAwesomePublicService{snapshot: model.AwesomeEntriesSnapshot{

@@ -75,6 +75,11 @@ func (h *AwesomeHandler) HandleEntries(w http.ResponseWriter, r *http.Request) {
 }
 
 func sourceCard(source model.AwesomeSource) model.AwesomeSourceCard {
+	languageBytes := source.LanguageBytes
+	if languageBytes == nil {
+		// 公共目录是客户端的稳定契约；无语言数据也必须返回空对象，不能省略字段或编码成 null。
+		languageBytes = map[string]int{}
+	}
 	return model.AwesomeSourceCard{
 		ID: source.ID, DisplayName: source.DisplayName, RepoFullName: source.RepoFullName,
 		RepoURL: source.RepoURL, RepoDescription: source.RepoDescription,
@@ -83,7 +88,7 @@ func sourceCard(source model.AwesomeSource) model.AwesomeSourceCard {
 		SourceStars: source.SourceStars, SourceForks: source.SourceForks,
 		SourceWatchers: source.SourceWatchers, SourceSubscribers: source.SourceSubscribers,
 		SourceOpenIssues: source.SourceOpenIssues, SourceLanguage: source.SourceLanguage,
-		LanguageBytes: source.LanguageBytes, GitHubRepoCount: source.GitHubRepoCount,
+		LanguageBytes: languageBytes, GitHubRepoCount: source.GitHubRepoCount,
 		ExternalEntryCount: source.ExternalEntryCount,
 		LastSyncedAt:       source.LastSyncedAt, UpdatedAt: source.UpdatedAt,
 	}

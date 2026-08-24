@@ -61,7 +61,7 @@ type AwesomeSourceCard struct {
 	SourceSubscribers  int            `json:"source_subscribers"`
 	SourceOpenIssues   int            `json:"source_open_issues"`
 	SourceLanguage     string         `json:"source_language,omitempty"`
-	LanguageBytes      map[string]int `json:"language_bytes,omitempty"`
+	LanguageBytes      map[string]int `json:"language_bytes"`
 	GitHubRepoCount    int            `json:"github_repo_count"`
 	ExternalEntryCount int            `json:"external_entry_count"`
 	LastSyncedAt       *time.Time     `json:"last_synced_at,omitempty"`
