@@ -194,7 +194,7 @@ Starcat 本地优先缓存用的全量公开 catalog 快照。该接口不接收
 
 返回已发布的 Starcat 精选 Awesome 来源目录，按 `sort_order ASC, id ASC` 排序。需要普通 API Key，不接受用户身份或订阅参数。
 
-响应字段包括稳定 `id`、`display_name`、canonical `repo_full_name` / `repo_url`、HTTPS `image_url`、中英文介绍、`featured`、排序、来源仓库 `source_stars`、GitHub / 外部条目计数以及内容和同步时间。每轮来源同步都会更新来源仓库 GitHub 元数据，即使 README SHA 未变化也会刷新 Stars。响应带 `ETag` 和 `Cache-Control`；`If-None-Match` 命中时直接返回 `304`，不附带 envelope。
+响应字段包括稳定 `id`、`display_name`、canonical `repo_full_name` / `repo_url`、GitHub 仓库真实 `repo_description`、HTTPS `image_url`、中英文精选介绍、`featured`、排序、来源仓库 `source_stars`、GitHub / 外部条目计数以及内容和同步时间。`repo_description` 与 `source_stars` 均复用公共 `repos` 缓存，不在 `awesome_sources` 重复保存；每轮来源同步都会更新来源仓库 GitHub 元数据，即使 README SHA 未变化也会刷新这些字段。响应带 `ETag` 和 `Cache-Control`；`If-None-Match` 命中时直接返回 `304`，不附带 envelope。
 
 来源目录与单来源 entries 都以 SQLite 快照作为可跨重启复用的持久缓存，并额外使用进程内响应缓存复用已编码 JSON、gzip 和 ETag。该缓存 TTL 由 `CACHE_TTL_SECONDS` 控制，默认 10800 秒；采用 64 条 / 64 MiB 双上限 LRU，同 key 并发 miss 只重建一次，来源 CRUD、同步、发布和下架会精确失效相关 key。公开响应的 `Cache-Control` 为 5 分钟，进程重启只会丢失加速层，不会丢失 Awesome 快照。
 

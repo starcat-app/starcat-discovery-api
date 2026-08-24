@@ -18,6 +18,7 @@ type AwesomeSource struct {
 	RepoFullName       string              `json:"repo_full_name"`
 	RepoURL            string              `json:"repo_url,omitempty"`
 	DisplayName        string              `json:"display_name"`
+	RepoDescription    string              `json:"repo_description,omitempty"`
 	ImageURL           string              `json:"image_url,omitempty"`
 	SummaryZH          string              `json:"summary_zh,omitempty"`
 	SummaryEN          string              `json:"summary_en,omitempty"`
@@ -42,6 +43,7 @@ type AwesomeSourceCard struct {
 	DisplayName        string     `json:"display_name"`
 	RepoFullName       string     `json:"repo_full_name"`
 	RepoURL            string     `json:"repo_url"`
+	RepoDescription    string     `json:"repo_description,omitempty"`
 	ImageURL           string     `json:"image_url,omitempty"`
 	SummaryZH          string     `json:"summary_zh,omitempty"`
 	SummaryEN          string     `json:"summary_en,omitempty"`

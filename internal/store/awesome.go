@@ -426,6 +426,11 @@ const awesomeSourceSelect = `
 	           WHERE full_name = awesome_sources.repo_full_name COLLATE NOCASE
 	           LIMIT 1
 	       ), 0) AS source_stars,
+	       COALESCE((
+	           SELECT description FROM repos
+	           WHERE full_name = awesome_sources.repo_full_name COLLATE NOCASE
+	           LIMIT 1
+	       ), '') AS repo_description,
 	       github_repo_count, external_entry_count,
 	       last_synced_at, created_at, updated_at
 	FROM awesome_sources`
@@ -436,19 +441,20 @@ type rowScanner interface {
 
 func scanAwesomeSource(row rowScanner) (model.AwesomeSource, error) {
 	var source model.AwesomeSource
-	var imageURL, summaryZH, summaryEN, defaultBranch, readmePath, sha sql.NullString
+	var imageURL, summaryZH, summaryEN, repoDescription, defaultBranch, readmePath, sha sql.NullString
 	var lastSyncedAt sql.NullString
 	var featured int
 	var createdAt, updatedAt string
 	err := row.Scan(&source.ID, &source.RepoFullName, &source.DisplayName, &imageURL, &summaryZH, &summaryEN,
 		&featured, &source.SortOrder, &source.Status, &source.Revision, &defaultBranch, &readmePath,
-		&sha, &source.SourceStars, &source.GitHubRepoCount, &source.ExternalEntryCount, &lastSyncedAt, &createdAt, &updatedAt)
+		&sha, &source.SourceStars, &repoDescription, &source.GitHubRepoCount, &source.ExternalEntryCount, &lastSyncedAt, &createdAt, &updatedAt)
 	if err != nil {
 		return model.AwesomeSource{}, err
 	}
 	source.ImageURL = imageURL.String
 	source.SummaryZH = summaryZH.String
 	source.SummaryEN = summaryEN.String
+	source.RepoDescription = repoDescription.String
 	source.Featured = featured != 0
 	source.DefaultBranch = defaultBranch.String
 	source.ReadmePath = readmePath.String

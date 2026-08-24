@@ -77,7 +77,8 @@ func (h *AwesomeHandler) HandleEntries(w http.ResponseWriter, r *http.Request) {
 func sourceCard(source model.AwesomeSource) model.AwesomeSourceCard {
 	return model.AwesomeSourceCard{
 		ID: source.ID, DisplayName: source.DisplayName, RepoFullName: source.RepoFullName,
-		RepoURL: source.RepoURL, ImageURL: source.ImageURL, SummaryZH: source.SummaryZH,
+		RepoURL: source.RepoURL, RepoDescription: source.RepoDescription,
+		ImageURL: source.ImageURL, SummaryZH: source.SummaryZH,
 		SummaryEN: source.SummaryEN, Featured: source.Featured, SortOrder: source.SortOrder,
 		SourceStars: source.SourceStars, GitHubRepoCount: source.GitHubRepoCount, ExternalEntryCount: source.ExternalEntryCount,
 		LastSyncedAt: source.LastSyncedAt, UpdatedAt: source.UpdatedAt,
