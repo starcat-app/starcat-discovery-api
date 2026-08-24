@@ -67,7 +67,7 @@ type AwesomeEntry struct {
 	OwnerAvatar      string   `json:"owner_avatar,omitempty"`
 	Language         string   `json:"language,omitempty"`
 	Stars            int      `json:"stars,omitempty"`
-	IsArchived       bool     `json:"is_archived,omitempty"`
+	IsArchived       bool     `json:"is_archived"`
 	UpdatedAt        string   `json:"updated_at,omitempty"`
 	EntryTitle       string   `json:"entry_title"`
 	EntryDescription string   `json:"entry_description,omitempty"`

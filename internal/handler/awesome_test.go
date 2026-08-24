@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,8 +32,32 @@ func TestAwesomeSourcesETagReturns304(t *testing.T) {
 	}
 }
 
+func TestAwesomeEntriesAlwaysIncludeArchivedState(t *testing.T) {
+	updatedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	service := stubAwesomePublicService{snapshot: model.AwesomeEntriesSnapshot{
+		Source: model.AwesomeEntriesSource{ID: "awesome-mac", DisplayName: "Awesome Mac", UpdatedAt: updatedAt},
+		Entries: []model.AwesomeEntry{{
+			GhRepoID: ptr(int64(42)), FullName: "owner/repo", EntryTitle: "Repo",
+			SectionPath: []string{"Apps"}, SourceAnchorURL: "https://example.com#apps",
+		}},
+	}}
+	handler := NewAwesomeHandler(service)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources/awesome-mac/entries", nil)
+	request.SetPathValue("source_id", "awesome-mac")
+	handler.HandleEntries(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d, body=%q", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"is_archived":false`) {
+		t.Fatalf("is_archived=false must remain in the public contract: %s", response.Body.String())
+	}
+}
+
 type stubAwesomePublicService struct {
-	sources []model.AwesomeSource
+	sources  []model.AwesomeSource
+	snapshot model.AwesomeEntriesSnapshot
 }
 
 func (s stubAwesomePublicService) ListPublishedSources(context.Context) ([]model.AwesomeSource, error) {
@@ -40,5 +65,7 @@ func (s stubAwesomePublicService) ListPublishedSources(context.Context) ([]model
 }
 
 func (s stubAwesomePublicService) PublishedEntries(context.Context, string) (model.AwesomeEntriesSnapshot, error) {
-	return model.AwesomeEntriesSnapshot{}, nil
+	return s.snapshot, nil
 }
+
+func ptr[T any](value T) *T { return &value }
