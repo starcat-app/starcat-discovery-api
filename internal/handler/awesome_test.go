@@ -14,7 +14,7 @@ import (
 func TestAwesomeSourcesETagReturns304(t *testing.T) {
 	service := stubAwesomePublicService{sources: []model.AwesomeSource{{
 		ID: "awesome-mac", DisplayName: "Awesome Mac", RepoFullName: "owner/repo",
-		RepoURL: "https://github.com/owner/repo", Status: model.AwesomeSourcePublished,
+		RepoURL: "https://github.com/owner/repo", Status: model.AwesomeSourcePublished, SourceStars: 123,
 		UpdatedAt: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
 	}}}
 	handler := NewAwesomeHandler(service)
@@ -22,6 +22,9 @@ func TestAwesomeSourcesETagReturns304(t *testing.T) {
 	handler.HandleSources(first, httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources", nil))
 	if first.Code != http.StatusOK || first.Header().Get("ETag") == "" {
 		t.Fatalf("first response = %d, headers=%v", first.Code, first.Header())
+	}
+	if !strings.Contains(first.Body.String(), `"source_stars":123`) {
+		t.Fatalf("source repository stars missing from public catalog: %s", first.Body.String())
 	}
 	secondRequest := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources", nil)
 	secondRequest.Header.Set("If-None-Match", first.Header().Get("ETag"))

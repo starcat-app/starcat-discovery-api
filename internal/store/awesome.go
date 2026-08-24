@@ -306,6 +306,24 @@ func (s *SQLiteStore) ReplaceAwesomeSnapshot(
 	return tx.Commit()
 }
 
+// UpsertAwesomeRepositories refreshes GitHub facts without changing an Awesome entry snapshot.
+// It is intentionally separate from ReplaceAwesomeSnapshot because source-repository Stars may
+// change even when the README SHA—and therefore its parsed entry set—remains unchanged.
+func (s *SQLiteStore) UpsertAwesomeRepositories(ctx context.Context, repos []model.Repository) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	for _, repo := range repos {
+		if err := upsertAwesomeRepo(ctx, tx, repo, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // ListPublishedAwesomeEntries returns only verified GitHub Repo rows from a published source.
 func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID string) ([]model.AwesomeEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -379,7 +397,13 @@ func upsertAwesomeRepo(ctx context.Context, tx *sql.Tx, repo model.Repository, n
 const awesomeSourceSelect = `
 	SELECT id, repo_full_name, display_name, image_url, summary_zh, summary_en,
 	       featured, sort_order, status, revision, default_branch, readme_path,
-	       last_successful_sha, github_repo_count, external_entry_count,
+	       last_successful_sha,
+	       COALESCE((
+	           SELECT stars FROM repos
+	           WHERE full_name = awesome_sources.repo_full_name COLLATE NOCASE
+	           LIMIT 1
+	       ), 0) AS source_stars,
+	       github_repo_count, external_entry_count,
 	       last_synced_at, created_at, updated_at
 	FROM awesome_sources`
 
@@ -395,7 +419,7 @@ func scanAwesomeSource(row rowScanner) (model.AwesomeSource, error) {
 	var createdAt, updatedAt string
 	err := row.Scan(&source.ID, &source.RepoFullName, &source.DisplayName, &imageURL, &summaryZH, &summaryEN,
 		&featured, &source.SortOrder, &source.Status, &source.Revision, &defaultBranch, &readmePath,
-		&sha, &source.GitHubRepoCount, &source.ExternalEntryCount, &lastSyncedAt, &createdAt, &updatedAt)
+		&sha, &source.SourceStars, &source.GitHubRepoCount, &source.ExternalEntryCount, &lastSyncedAt, &createdAt, &updatedAt)
 	if err != nil {
 		return model.AwesomeSource{}, err
 	}

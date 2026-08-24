@@ -28,6 +28,7 @@ type AwesomeSource struct {
 	DefaultBranch      string              `json:"default_branch,omitempty"`
 	ReadmePath         string              `json:"readme_path,omitempty"`
 	LastSuccessfulSHA  string              `json:"last_successful_sha,omitempty"`
+	SourceStars        int                 `json:"source_stars"`
 	GitHubRepoCount    int                 `json:"github_repo_count"`
 	ExternalEntryCount int                 `json:"external_entry_count"`
 	LastSyncedAt       *time.Time          `json:"last_synced_at,omitempty"`
@@ -46,6 +47,7 @@ type AwesomeSourceCard struct {
 	SummaryEN          string     `json:"summary_en,omitempty"`
 	Featured           bool       `json:"featured"`
 	SortOrder          int        `json:"sort_order"`
+	SourceStars        int        `json:"source_stars"`
 	GitHubRepoCount    int        `json:"github_repo_count"`
 	ExternalEntryCount int        `json:"external_entry_count"`
 	LastSyncedAt       *time.Time `json:"last_synced_at,omitempty"`

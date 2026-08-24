@@ -31,6 +31,7 @@ type Store interface {
 	GetActiveAwesomeSyncRun(context.Context, string) (model.AwesomeSyncRun, error)
 	FinishAwesomeSyncRun(context.Context, model.AwesomeSyncRun) error
 	ListAwesomeSyncRuns(context.Context, string, int) ([]model.AwesomeSyncRun, error)
+	UpsertAwesomeRepositories(context.Context, []model.Repository) error
 	ReplaceAwesomeSnapshot(context.Context, string, string, string, string, []model.Repository, []model.AwesomeEntry, model.AwesomeSyncRun) error
 	ListPublishedAwesomeEntries(context.Context, string) ([]model.AwesomeEntry, error)
 }
@@ -197,6 +198,11 @@ func (s *Service) SyncSource(ctx context.Context, sourceID, trigger string) (mod
 func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource, run model.AwesomeSyncRun) (model.AwesomeSyncRun, error) {
 	sourceRepo, err := s.validateSourceRepository(ctx, source.RepoFullName)
 	if err != nil {
+		return run, err
+	}
+	// 来源仓库本身不属于 README 条目，但卡片仍需展示它的实时 GitHub 元数据。
+	// 每轮同步都先刷新共享 repos 主表，这样 README SHA 未变化时 Stars 也不会停滞。
+	if err := s.store.UpsertAwesomeRepositories(ctx, []model.Repository{repositoryModel(sourceRepo, s.now())}); err != nil {
 		return run, err
 	}
 	readme, err := s.github.GetREADME(ctx, sourceRepo.FullName)

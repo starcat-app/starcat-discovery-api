@@ -51,7 +51,7 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatalf("SyncSource() = %+v, %v", run, err)
 	}
 	ready, err := sqliteStore.GetAwesomeSource(ctx, created.ID)
-	if err != nil || ready.Status != model.AwesomeSourceReady || ready.GitHubRepoCount != 1 {
+	if err != nil || ready.Status != model.AwesomeSourceReady || ready.SourceStars != 321 || ready.GitHubRepoCount != 1 {
 		t.Fatalf("ready source = %+v, %v", ready, err)
 	}
 	if _, err := service.PublishSource(ctx, created.ID); err != nil {
@@ -68,6 +68,17 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatalf("snapshot updated_at = %s, last_synced_at = %v", snapshot.Source.UpdatedAt, ready.LastSyncedAt)
 	}
 
+	updatedSource := fake.repos["acme/awesome"]
+	updatedSource.Stargazers = 654
+	fake.repos["acme/awesome"] = updatedSource
+	if _, err := service.SyncSource(ctx, created.ID, "manual"); err != nil {
+		t.Fatalf("unchanged README metadata refresh error = %v", err)
+	}
+	refreshed, err := sqliteStore.GetAwesomeSource(ctx, created.ID)
+	if err != nil || refreshed.SourceStars != 654 {
+		t.Fatalf("source stars after unchanged README refresh = %d, %v", refreshed.SourceStars, err)
+	}
+
 	fake.readme.SHA = "sha-2"
 	fake.readme.Content = []byte("- [Missing](https://github.com/example/missing)\n")
 	if _, err := service.SyncSource(ctx, created.ID, "manual"); err == nil {
@@ -78,7 +89,7 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatalf("failed sync replaced previous snapshot: %+v, %v", snapshot, err)
 	}
 	runs, err := service.SyncRuns(ctx, created.ID)
-	if err != nil || len(runs) != 2 || runs[0].Status != "failed" || runs[1].Status != "succeeded" {
+	if err != nil || len(runs) != 3 || runs[0].Status != "failed" || runs[1].Status != "succeeded" || runs[2].Status != "succeeded" {
 		t.Fatalf("sync runs = %+v, %v", runs, err)
 	}
 	if _, err := service.ArchiveSource(ctx, created.ID); err != nil {
@@ -186,5 +197,5 @@ func (f *fakeGitHubClient) GetREADME(_ context.Context, _ string) (gh.README, er
 }
 
 func sourceRepository() gh.Repository {
-	return gh.Repository{ID: 1, FullName: "acme/awesome", Name: "awesome", DefaultBranch: "main", Owner: gh.Owner{Login: "acme"}}
+	return gh.Repository{ID: 1, FullName: "acme/awesome", Name: "awesome", DefaultBranch: "main", Stargazers: 321, Owner: gh.Owner{Login: "acme"}}
 }

@@ -64,7 +64,7 @@ func sourceCard(source model.AwesomeSource) model.AwesomeSourceCard {
 		ID: source.ID, DisplayName: source.DisplayName, RepoFullName: source.RepoFullName,
 		RepoURL: source.RepoURL, ImageURL: source.ImageURL, SummaryZH: source.SummaryZH,
 		SummaryEN: source.SummaryEN, Featured: source.Featured, SortOrder: source.SortOrder,
-		GitHubRepoCount: source.GitHubRepoCount, ExternalEntryCount: source.ExternalEntryCount,
+		SourceStars: source.SourceStars, GitHubRepoCount: source.GitHubRepoCount, ExternalEntryCount: source.ExternalEntryCount,
 		LastSyncedAt: source.LastSyncedAt, UpdatedAt: source.UpdatedAt,
 	}
 }
