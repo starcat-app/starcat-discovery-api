@@ -89,6 +89,7 @@ go run ./cmd/server/
 |---|---:|---|---|
 | `PORT` | 否 | `5006` | HTTP 端口 |
 | `STORE_FILE` | 否 | `./discovery.db` | SQLite 文件路径 |
+| `METRICS_STORE_FILE` | 否 | `./discovery-metrics.db` | 独立请求指标 SQLite 路径 |
 | `API_KEYS` | 是 | 无 | Starcat 客户端读取接口 key |
 | `ADMIN_API_KEYS` | 是 | 无 | `/internal/*` 管理接口 key |
 | `GITHUB_TOKENS` | 是 | 无 | GitHub PAT 池，逗号分隔 |

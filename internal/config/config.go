@@ -33,6 +33,7 @@ const (
 type Config struct {
 	Port                    string
 	StoreFile               string
+	MetricsStoreFile        string
 	APIKeys                 []string
 	AdminAPIKeys            []string
 	GitHubTokens            []string
@@ -61,6 +62,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Port:                    kitenv.OrDefault("PORT", defaultPort),
 		StoreFile:               kitenv.OrDefault("STORE_FILE", defaultStoreFile),
+		MetricsStoreFile:        kitenv.OrDefault("METRICS_STORE_FILE", "./discovery-metrics.db"),
 		APIKeys:                 kitenv.LookupCSV("API_KEYS"),
 		AdminAPIKeys:            kitenv.LookupCSV("ADMIN_API_KEYS"),
 		GitHubTokens:            kitenv.LookupCSV("GITHUB_TOKENS"),

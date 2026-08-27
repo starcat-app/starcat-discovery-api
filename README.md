@@ -89,6 +89,7 @@ The default port is `5006`.
 |---|---:|---|---|
 | `PORT` | No | `5006` | HTTP port |
 | `STORE_FILE` | No | `./discovery.db` | SQLite file path |
+| `METRICS_STORE_FILE` | No | `./discovery-metrics.db` | Dedicated request metrics SQLite path |
 | `API_KEYS` | Yes | None | Keys for Starcat client read endpoints |
 | `ADMIN_API_KEYS` | Yes | None | Keys for `/internal/*` admin endpoints |
 | `GITHUB_TOKENS` | Yes | None | Comma-separated GitHub PAT pool |
