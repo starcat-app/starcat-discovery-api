@@ -18,8 +18,10 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=
 github.com/robfig/cron/v3 v3.0.1/go.mod h1:eQICP3HwyT7UooqI/z+Ov+PtYAWygg1TEWWzGIFLtro=
-github.com/starcat-app/starcat-api-kit v0.2.0 h1:+7bnX1B/IWCSBTuFAJYAeTB5qd9vbrI8+zGkCLSJah0=
-github.com/starcat-app/starcat-api-kit v0.2.0/go.mod h1:VcNsxwF+vGQGuzTHfGhDx/Pl5qkiO9h5oimpZ7F/Sts=
+github.com/starcat-app/starcat-api-kit v0.3.0 h1:gA+3Y+qfUsIMd1vqekc8g3tkjTzvjWksfE9x7pPFRHw=
+github.com/starcat-app/starcat-api-kit v0.3.0/go.mod h1:9d2e8RAmDf/wTF8NmfyREWn2tQwZHSCw0I+MJrYfcPo=
+github.com/yuin/goldmark v1.8.5 h1:r6N5afV5qj/5S4UTch8agZHJ8UxNCMwX7WjkkJam2NA=
+github.com/yuin/goldmark v1.8.5/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
 golang.org/x/mod v0.33.0 h1:tHFzIWbBifEmbwtGz65eaWyGiGZatSrT9prnU8DbVL8=
 golang.org/x/mod v0.33.0/go.mod h1:swjeQEj+6r7fODbD2cqrnje9PnziFuw4bmLbBZFrQ5w=
 golang.org/x/oauth2 v0.36.0 h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs=

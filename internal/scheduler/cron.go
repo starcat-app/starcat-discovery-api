@@ -21,6 +21,11 @@ type CacheInvalidator interface {
 	Invalidate()
 }
 
+// AwesomeSyncService refreshes published Awesome sources without coupling their data to discovery bulk.
+type AwesomeSyncService interface {
+	SyncPublishedSources(ctx context.Context) error
+}
+
 // Scheduler 封装 cron 任务生命周期。
 type Scheduler struct {
 	cron        *cron.Cron
@@ -28,15 +33,30 @@ type Scheduler struct {
 }
 
 // New 创建同步调度器。
-func New(syncer SyncService, syncSpec, fullSyncSpec string, invalidator CacheInvalidator) *Scheduler {
+func New(syncer SyncService, syncSpec, fullSyncSpec string, invalidator CacheInvalidator, awesomeSyncers ...AwesomeSyncService) *Scheduler {
 	c := cron.New()
 	mustAdd(c, syncSpec, func() {
 		run(syncer, "scheduled-light", invalidator)
+		runAwesome(awesomeSyncers)
 	})
 	mustAdd(c, fullSyncSpec, func() {
 		run(syncer, "scheduled-full", invalidator)
 	})
 	return &Scheduler{cron: c, invalidator: invalidator}
+}
+
+func runAwesome(syncers []AwesomeSyncService) {
+	for _, syncer := range syncers {
+		if syncer == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		err := syncer.SyncPublishedSources(ctx)
+		cancel()
+		if err != nil {
+			log.Printf("[scheduler] Awesome sync failed: %v", err)
+		}
+	}
 }
 
 // Start 启动 cron。

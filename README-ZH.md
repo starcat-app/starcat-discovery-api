@@ -69,6 +69,7 @@ brew install --cask starcat
 - 普通 API Key 与 Admin API Key 分离
 - SQLite 持久化，Fly.io volume 保存数据
 - GitHub PAT 池驱动 Search / repo / release ingest
+- Awesome 精选来源内容管理、GFM AST 解析、持久化同步任务与独立 ETag 快照
 - 有界异步星标历史 worker、SQLite 缓存、ETag 与查询预算护栏
 - 开源友好的 README、LICENSE、CONTRIBUTING、SECURITY、Dockerfile、Fly.io 配置
 
@@ -88,13 +89,14 @@ go run ./cmd/server/
 |---|---:|---|---|
 | `PORT` | 否 | `5006` | HTTP 端口 |
 | `STORE_FILE` | 否 | `./discovery.db` | SQLite 文件路径 |
+| `METRICS_STORE_FILE` | 否 | `./discovery-metrics.db` | 独立请求指标 SQLite 路径 |
 | `API_KEYS` | 是 | 无 | Starcat 客户端读取接口 key |
 | `ADMIN_API_KEYS` | 是 | 无 | `/internal/*` 管理接口 key |
 | `GITHUB_TOKENS` | 是 | 无 | GitHub PAT 池，逗号分隔 |
 | `SYNC_ENABLED` | 否 | `true` | 是否启动定时同步 |
 | `SYNC_CRON` | 否 | `17 */3 * * *` | 轻同步 cron |
 | `FULL_SYNC_CRON` | 否 | `23 2 * * *` | 全量同步 cron |
-| `CACHE_TTL_SECONDS` | 否 | `10800` | `/discovery/bulk` 进程内缓存 TTL |
+| `CACHE_TTL_SECONDS` | 否 | `10800` | `/discovery/bulk` 与 Awesome 公共响应的进程内缓存 TTL |
 | `FEED_TARGET_SIZE` | 否 | `500` | 每轮 GitHub Search 的全局候选预算，服务端最高限制为 `1600` |
 | `STAR_HISTORY_ENABLED` | 否 | `false` | 是否开启 GH Archive / BigQuery 星标历史 Provider |
 | `STAR_HISTORY_CACHE_TTL_SECONDS` | 否 | `86400` | 成功历史缓存 TTL |
@@ -126,9 +128,15 @@ GET /api/v1/discovery/bulk
 GET /api/v1/discovery/languages
 GET /api/v1/discovery/topics
 GET /api/v1/discovery/platforms
+GET /api/v1/discovery/awesome/sources
+GET /api/v1/discovery/awesome/sources/{source_id}/entries
 GET /api/v1/repos/{owner}/{repo}/star-history?repo_id={id}&range=3m|1y|all
 GET /internal/discovery/trending-candidates
 POST /internal/sync/discovery
+GET|POST /internal/discovery/awesome/sources
+PATCH /internal/discovery/awesome/sources/{source_id}
+POST /internal/discovery/awesome/sources/{source_id}/sync|publish|archive
+GET /internal/discovery/awesome/sources/{source_id}/sync-runs
 ```
 
 `GET /api/v1/ping` 返回鉴权后的服务标识，以及由发布 tag 注入的构建版本：
@@ -139,7 +147,17 @@ POST /internal/sync/discovery
 
 发现 / 热门 / 新发布接口读取 SQLite 预计算结果；`/discovery/bulk` 提供 Starcat 本地优先缓存所需的完整公开 catalog 快照。管理同步入口触发 GitHub ingest 与榜单重建。趋势候选只保留在 `/internal/discovery/trending-candidates`，需要 Admin API Key，不进入 summary / bulk / Starcat UI，客户端当前仍使用既有 `starcat-trending-api`。
 
+Awesome 使用独立来源目录和单来源 entries 快照，不并入 discovery bulk。运营来源先创建为草稿，成功同步至少一个公开 GitHub Repo 后进入 ready，再显式发布；下架保留来源和最近成功快照。README 通过 CommonMark/GFM AST 解析，外部链接只保留运营统计，不进入客户端 Repo 列表。发布来源随常规轻同步 cron 刷新，管理端也可单独触发。SQLite 持久快照可跨进程重启复用；公共 Awesome 响应另使用有界进程内 LRU 复用已编码 JSON、gzip 和 ETag，最多 64 条 / 64 MiB，同 key 并发 miss 只构建一次，来源变更时精确失效。
+
 星标历史接口必填稳定 GitHub `repo_id`。缓存命中返回带 `ETag` 和 `Cache-Control` 的 `200`；公开仓库首次 miss 经 ID 与 owner/name 校验后返回 `202 + Retry-After: 5`，由有界 worker 异步构建。私有仓库会被拒绝。完整响应和错误契约见 [`docs/api.md`](docs/api.md)。
+
+## 运营与调用指标
+
+- `GET /internal/stats`（API Key）：目录、榜单、Star History、Awesome 与同步任务聚合状态。
+- `GET /internal/sync-runs?limit=1..100`（Admin Key）：受限近期 Discovery 同步记录，不返回错误原文。
+- `GET /internal/metrics/{summary,timeseries,routes,status-codes}`（API Key）：路由调用量、错误与延迟聚合。
+
+指标不会保存凭据、查询串、请求体、客户端地址或真实路径参数。
 
 ## 同步与分类逻辑
 

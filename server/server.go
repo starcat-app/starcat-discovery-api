@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	kitmetrics "github.com/starcat-app/starcat-api-kit/metrics"
+	"github.com/starcat-app/starcat-discovery-api/internal/awesome"
 	"github.com/starcat-app/starcat-discovery-api/internal/config"
 	"github.com/starcat-app/starcat-discovery-api/internal/github"
 	"github.com/starcat-app/starcat-discovery-api/internal/handler"
@@ -33,6 +35,7 @@ type Service struct {
 	store              *store.SQLiteStore
 	scheduler          *scheduler.Scheduler
 	starHistoryService *starhistory.Service
+	metrics            *kitmetrics.Collector
 
 	closeOnce sync.Once
 }
@@ -57,6 +60,9 @@ func New(cfg config.Config) (*Service, error) {
 	if cfg.Port == "" {
 		cfg.Port = defaultPort
 	}
+	if cfg.MetricsStoreFile == "" {
+		cfg.MetricsStoreFile = ":memory:"
+	}
 
 	apiAuth := middleware.NewBearerAuth("api", cfg.APIKeys)
 	adminAuth := middleware.NewBearerAuth("admin", cfg.AdminAPIKeys)
@@ -65,12 +71,33 @@ func New(cfg config.Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize SQLite: %w", err)
 	}
+	metricsStore, err := kitmetrics.OpenSQLite(cfg.MetricsStoreFile)
+	if err != nil {
+		_ = sqliteStore.Close()
+		return nil, fmt.Errorf("initialize metrics SQLite: %w", err)
+	}
+	metricsCollector, err := kitmetrics.NewCollector(kitmetrics.Config{Service: Name(), Store: metricsStore})
+	if err != nil {
+		_ = metricsStore.Close()
+		_ = sqliteStore.Close()
+		return nil, fmt.Errorf("initialize metrics collector: %w", err)
+	}
+	metricsHandler := kitmetrics.NewHandler(Name(), metricsCollector.Store())
 
 	pool := tokenpool.New(cfg.GitHubTokens)
 	githubClient := github.NewClient(pool, cfg.RateLimitFloor)
 	ingestService := ingest.NewService(sqliteStore, githubClient, cfg.FeedTargetSize)
 	discoveryHandler := handler.NewDiscoveryHandler(sqliteStore)
 	bulkCache := handler.NewBulkCache(time.Duration(cfg.CacheTTLSeconds) * time.Second)
+	// Awesome 复用现有 CACHE_TTL_SECONDS 运维入口，并用独立容量上限保护进程内存。
+	awesomeCache := handler.NewAwesomeResponseCache(
+		time.Duration(cfg.CacheTTLSeconds)*time.Second,
+		64,
+		64<<20,
+	)
+	awesomeService := awesome.NewService(sqliteStore, githubClient, awesomeCache)
+	awesomeHandler := handler.NewAwesomeHandler(awesomeService, awesomeCache)
+	awesomeAdminHandler := handler.NewAwesomeAdminHandler(awesomeService)
 
 	var starHistoryService *starhistory.Service
 	if cfg.StarHistoryEnabled {
@@ -79,11 +106,13 @@ func New(cfg config.Config) (*Service, error) {
 			[]byte(cfg.GCPCredentialsJSON),
 		)
 		if runnerErr != nil {
+			_ = metricsCollector.Close()
 			_ = sqliteStore.Close()
 			return nil, fmt.Errorf("initialize BigQuery credentials: %w", runnerErr)
 		}
 		provider, providerErr := starhistory.NewGHArchiveBigQueryProvider(cfg.GCPProjectID, runner)
 		if providerErr != nil {
+			_ = metricsCollector.Close()
 			_ = sqliteStore.Close()
 			return nil, fmt.Errorf("initialize star history provider: %w", providerErr)
 		}
@@ -102,6 +131,7 @@ func New(cfg config.Config) (*Service, error) {
 			},
 		)
 		if err != nil {
+			_ = metricsCollector.Close()
 			_ = sqliteStore.Close()
 			return nil, fmt.Errorf("initialize star history service: %w", err)
 		}
@@ -115,7 +145,7 @@ func New(cfg config.Config) (*Service, error) {
 
 	var sch *scheduler.Scheduler
 	if cfg.SyncEnabled {
-		sch = scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache)
+		sch = scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache, awesomeService)
 		sch.Start()
 	}
 
@@ -130,21 +160,37 @@ func New(cfg config.Config) (*Service, error) {
 	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
 	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
 	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
+	mux.Handle("GET /api/v1/discovery/awesome/sources", apiAuth.Wrap(http.HandlerFunc(awesomeHandler.HandleSources)))
+	mux.Handle("GET /api/v1/discovery/awesome/sources/{source_id}/entries", apiAuth.Wrap(http.HandlerFunc(awesomeHandler.HandleEntries)))
 	mux.Handle(
 		"GET /api/v1/repos/{owner}/{repo}/star-history",
 		apiAuth.Wrap(http.HandlerFunc(starHistoryHandler.HandleStarHistory)),
 	)
 	mux.Handle("GET /internal/discovery/trending-candidates", adminAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTrending)))
+	mux.Handle("GET /internal/stats", apiAuth.Wrap(handler.HandleOperationalStats(sqliteStore)))
+	mux.Handle("GET /internal/sync-runs", adminAuth.Wrap(handler.HandleSyncRuns(sqliteStore)))
+	mux.Handle("GET /internal/metrics/summary", apiAuth.Wrap(http.HandlerFunc(metricsHandler.HandleSummary)))
+	mux.Handle("GET /internal/metrics/timeseries", apiAuth.Wrap(http.HandlerFunc(metricsHandler.HandleTimeseries)))
+	mux.Handle("GET /internal/metrics/routes", apiAuth.Wrap(http.HandlerFunc(metricsHandler.HandleRoutes)))
+	mux.Handle("GET /internal/metrics/status-codes", apiAuth.Wrap(http.HandlerFunc(metricsHandler.HandleStatusCodes)))
 	mux.Handle("POST /internal/sync/discovery", adminAuth.Wrap(handler.HandleAdminSyncDiscovery(ingestService, bulkCache)))
+	mux.Handle("GET /internal/discovery/awesome/sources", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleList)))
+	mux.Handle("POST /internal/discovery/awesome/sources", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleCreate)))
+	mux.Handle("PATCH /internal/discovery/awesome/sources/{source_id}", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleUpdate)))
+	mux.Handle("POST /internal/discovery/awesome/sources/{source_id}/sync", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleSync)))
+	mux.Handle("POST /internal/discovery/awesome/sources/{source_id}/publish", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandlePublish)))
+	mux.Handle("POST /internal/discovery/awesome/sources/{source_id}/archive", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleArchive)))
+	mux.Handle("GET /internal/discovery/awesome/sources/{source_id}/sync-runs", adminAuth.Wrap(http.HandlerFunc(awesomeAdminHandler.HandleSyncRuns)))
 
 	log.Printf("starcat-discovery-api %s endpoints ready", version.Version)
 
 	return &Service{
 		cfg:                cfg,
-		handler:            middleware.CORS(mux),
+		handler:            metricsCollector.Wrap(middleware.CORS(mux)),
 		store:              sqliteStore,
 		scheduler:          sch,
 		starHistoryService: starHistoryService,
+		metrics:            metricsCollector,
 	}, nil
 }
 
@@ -166,6 +212,11 @@ func (s *Service) Close() error {
 		}
 		if s.store != nil {
 			closeErr = s.store.Close()
+		}
+		if s.metrics != nil {
+			if err := s.metrics.Close(); closeErr == nil {
+				closeErr = err
+			}
 		}
 	})
 	return closeErr

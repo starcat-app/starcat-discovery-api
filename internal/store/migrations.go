@@ -6,9 +6,8 @@ import (
 	"log"
 )
 
-// createSchema 初始化 discovery catalog。
-//
-// 本项目尚未上线，schema 直接按当前设计创建，不保留旧字段兼容或迁移逻辑。
+// createSchema 初始化 discovery catalog；CREATE TABLE 负责新库，后续 ensure 方法负责
+// 已上线 volume 的追加列，禁止要求生产环境删除数据库重建。
 func createSchema(ctx context.Context, db *sql.DB) error {
 	log.Println("[migrate] create discovery schema")
 	_, err := db.ExecContext(ctx, `
@@ -180,6 +179,132 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			repos_upserted INTEGER NOT NULL DEFAULT 0,
 			error_message   TEXT
 		);
+
+		CREATE TABLE IF NOT EXISTS awesome_sources (
+			id                    TEXT PRIMARY KEY,
+			repo_full_name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			display_name          TEXT NOT NULL,
+			image_url             TEXT,
+			summary_zh            TEXT,
+			summary_en            TEXT,
+			featured              INTEGER NOT NULL DEFAULT 0,
+			sort_order            INTEGER NOT NULL DEFAULT 0,
+			status                TEXT NOT NULL DEFAULT 'draft'
+				CHECK (status IN ('draft', 'ready', 'published', 'archived')),
+			revision              INTEGER NOT NULL DEFAULT 1,
+			default_branch        TEXT,
+			readme_path           TEXT,
+			last_successful_sha   TEXT,
+			repo_metadata_version INTEGER NOT NULL DEFAULT 1,
+			github_repo_count     INTEGER NOT NULL DEFAULT 0,
+			external_entry_count  INTEGER NOT NULL DEFAULT 0,
+			last_synced_at        TEXT,
+			created_at            TEXT NOT NULL,
+			updated_at            TEXT NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_awesome_sources_public
+			ON awesome_sources(status, sort_order, id);
+
+		CREATE TABLE IF NOT EXISTS awesome_source_languages (
+			source_id TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
+			language  TEXT NOT NULL,
+			bytes     INTEGER NOT NULL CHECK (bytes >= 0),
+			PRIMARY KEY (source_id, language)
+		);
+
+		CREATE TABLE IF NOT EXISTS awesome_entries (
+			source_id            TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
+			target_type          TEXT NOT NULL CHECK (target_type IN ('github_repo', 'external')),
+			target_key           TEXT NOT NULL,
+			gh_repo_id           INTEGER REFERENCES repos(gh_repo_id) ON DELETE SET NULL,
+			entry_title          TEXT NOT NULL,
+			entry_description    TEXT,
+			section_path_json    TEXT NOT NULL DEFAULT '[]',
+			raw_url              TEXT NOT NULL,
+			source_anchor_url    TEXT NOT NULL,
+			entry_order          INTEGER NOT NULL,
+			is_active            INTEGER NOT NULL DEFAULT 1,
+			first_seen_sha       TEXT NOT NULL,
+			last_seen_sha        TEXT NOT NULL,
+			created_at           TEXT NOT NULL,
+			updated_at           TEXT NOT NULL,
+			PRIMARY KEY (source_id, target_key)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_awesome_entries_source_order
+			ON awesome_entries(source_id, is_active, entry_order, target_key);
+		CREATE INDEX IF NOT EXISTS idx_awesome_entries_repo
+			ON awesome_entries(gh_repo_id, source_id) WHERE gh_repo_id IS NOT NULL;
+
+		CREATE TABLE IF NOT EXISTS awesome_sync_runs (
+			id                   TEXT PRIMARY KEY,
+			source_id            TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
+			status               TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+			trigger_kind         TEXT NOT NULL CHECK (trigger_kind IN ('manual', 'scheduler')),
+			readme_sha           TEXT,
+			github_count         INTEGER NOT NULL DEFAULT 0,
+			external_count       INTEGER NOT NULL DEFAULT 0,
+			invalid_count        INTEGER NOT NULL DEFAULT 0,
+			duplicate_count      INTEGER NOT NULL DEFAULT 0,
+			error_code           TEXT,
+			error_message        TEXT,
+			started_at           TEXT NOT NULL,
+			finished_at          TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_awesome_sync_runs_source
+			ON awesome_sync_runs(source_id, started_at DESC);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_awesome_sync_runs_active
+			ON awesome_sync_runs(source_id) WHERE status IN ('queued', 'running');
 	`)
+	if err != nil {
+		return err
+	}
+	return ensureAwesomeRepositoryMetadataVersion(ctx, db)
+}
+
+const awesomeRepositoryMetadataVersion = 1
+
+// ensureAwesomeRepositoryMetadataVersion 只让旧 Awesome 快照重建一次。
+//
+// 新增的仓库事实来自 GitHub API，但历史来源在 README SHA 未变化时会走 no-op。
+// 这里用持久版本标记清空一次旧 SHA，让既有发布来源在下一轮同步完整 enrich；版本写入后，
+// 后续进程重启不会再次清空 SHA，也不会破坏正常的远端与本地缓存命中。
+func ensureAwesomeRepositoryMetadataVersion(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(awesome_sources)`)
+	if err != nil {
+		return err
+	}
+	hasVersionColumn := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "repo_metadata_version" {
+			hasVersionColumn = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !hasVersionColumn {
+		if _, err := db.ExecContext(ctx, `
+			ALTER TABLE awesome_sources
+			ADD COLUMN repo_metadata_version INTEGER NOT NULL DEFAULT 0
+		`); err != nil {
+			return err
+		}
+	}
+	_, err = db.ExecContext(ctx, `
+		UPDATE awesome_sources
+		SET last_successful_sha = NULL,
+		    repo_metadata_version = ?
+		WHERE repo_metadata_version < ?
+	`, awesomeRepositoryMetadataVersion, awesomeRepositoryMetadataVersion)
 	return err
 }
