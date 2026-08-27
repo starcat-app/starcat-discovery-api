@@ -221,6 +221,71 @@ func TestSQLiteStorePruneReposNotInCascadesRelatedRows(t *testing.T) {
 	}
 }
 
+func TestSQLiteStorePruneReposNotInPreservesActiveAwesomeRepositories(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if _, err := store.CreateAwesomeSource(ctx, model.AwesomeSource{
+		ID: "awesome-protected", RepoFullName: "acme/awesome", DisplayName: "Protected",
+	}); err != nil {
+		t.Fatalf("CreateAwesomeSource() error = %v", err)
+	}
+	for _, repo := range []model.Repository{
+		{GhRepoID: 70, Owner: "keep", Name: "app", FullName: "keep/app", IndexedAt: now},
+		{GhRepoID: 71, Owner: "awesome", Name: "app", FullName: "awesome/app", IndexedAt: now},
+		{GhRepoID: 72, Owner: "stale", Name: "app", FullName: "stale/app", IndexedAt: now},
+	} {
+		if err := store.UpsertRepo(ctx, repo); err != nil {
+			t.Fatalf("UpsertRepo(%d) error = %v", repo.GhRepoID, err)
+		}
+	}
+	repoID := int64(71)
+	if err := store.ReplaceAwesomeSnapshot(
+		ctx,
+		"awesome-protected",
+		"main",
+		"README.md",
+		"sha-1",
+		nil,
+		[]model.AwesomeEntry{{
+			SourceID: "awesome-protected", TargetType: "github_repo", TargetKey: "github:71",
+			GhRepoID: &repoID, EntryTitle: "Awesome App", RawURL: "https://github.com/awesome/app",
+			SourceAnchorURL: "https://github.com/acme/awesome#apps", EntryOrder: 1,
+		}},
+		model.AwesomeSyncRun{},
+	); err != nil {
+		t.Fatalf("ReplaceAwesomeSnapshot() error = %v", err)
+	}
+
+	complete, err := store.AwesomeRepositoryFactsComplete(ctx, "awesome-protected", 1)
+	if err != nil || !complete {
+		t.Fatalf("AwesomeRepositoryFactsComplete() = %v, %v", complete, err)
+	}
+	pruned, err := store.PruneReposNotIn(ctx, []int64{70})
+	if err != nil {
+		t.Fatalf("PruneReposNotIn() error = %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned = %d, want only ordinary stale repo", pruned)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM repos WHERE gh_repo_id = 71`).Scan(&count); err != nil {
+		t.Fatalf("query protected repo error = %v", err)
+	}
+	if count != 1 {
+		t.Fatal("active Awesome repository was pruned")
+	}
+
+	if _, err := store.db.ExecContext(ctx, `UPDATE awesome_entries SET gh_repo_id = NULL WHERE source_id = ?`, "awesome-protected"); err != nil {
+		t.Fatalf("corrupt Awesome relation error = %v", err)
+	}
+	complete, err = store.AwesomeRepositoryFactsComplete(ctx, "awesome-protected", 1)
+	if err != nil || complete {
+		t.Fatalf("corrupt AwesomeRepositoryFactsComplete() = %v, %v", complete, err)
+	}
+}
+
 func TestSQLiteStoreLanguages(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC()

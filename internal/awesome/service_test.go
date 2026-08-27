@@ -201,6 +201,75 @@ func TestServiceRecoversAfterGitHubTransientFailures(t *testing.T) {
 	}
 }
 
+func TestServiceRebuildsUnchangedREADMEWhenRepositoryFactsAreIncomplete(t *testing.T) {
+	ctx := context.Background()
+	sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "awesome.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+	defer sqliteStore.Close()
+	guardedStore := &incompleteSnapshotStore{SQLiteStore: sqliteStore}
+	fake := &fakeGitHubClient{
+		repos: map[string]gh.Repository{
+			"acme/awesome": sourceRepository(),
+			"example/alpha": {
+				ID: 2, FullName: "example/alpha", Name: "alpha", Owner: gh.Owner{Login: "example"},
+				Stargazers: 42,
+			},
+		},
+		readme: gh.README{
+			Path: "README.md", SHA: "sha-1",
+			Content: []byte("- [Alpha](https://github.com/example/alpha)\n"),
+		},
+	}
+	service := NewService(guardedStore, fake)
+	created, err := service.CreateSource(ctx, model.AwesomeSource{
+		ID: "self-heal", RepoFullName: "acme/awesome", DisplayName: "Self Heal",
+	})
+	if err != nil {
+		t.Fatalf("CreateSource() error = %v", err)
+	}
+	if _, err := service.SyncSource(ctx, created.ID, "manual"); err != nil {
+		t.Fatalf("initial SyncSource() error = %v", err)
+	}
+	if _, err := service.PublishSource(ctx, created.ID); err != nil {
+		t.Fatalf("PublishSource() error = %v", err)
+	}
+
+	updated := fake.repos["example/alpha"]
+	updated.Stargazers = 99
+	fake.repos["example/alpha"] = updated
+	guardedStore.forceIncomplete = true
+	if _, err := service.SyncSource(ctx, created.ID, "manual"); err != nil {
+		t.Fatalf("self-heal SyncSource() error = %v", err)
+	}
+	snapshot, err := service.PublishedEntries(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("PublishedEntries() error = %v", err)
+	}
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Stars != 99 {
+		t.Fatalf("unchanged README did not rebuild repository facts: %+v", snapshot.Entries)
+	}
+}
+
+// incompleteSnapshotStore 只在本测试中模拟“README 未变、共享 repos 事实已丢失”。
+// 其余持久化行为仍走真实 SQLiteStore，确保自愈覆盖完整事务路径。
+type incompleteSnapshotStore struct {
+	*store.SQLiteStore
+	forceIncomplete bool
+}
+
+func (s *incompleteSnapshotStore) AwesomeRepositoryFactsComplete(
+	ctx context.Context,
+	sourceID string,
+	expectedCount int,
+) (bool, error) {
+	if s.forceIncomplete {
+		return false, nil
+	}
+	return s.SQLiteStore.AwesomeRepositoryFactsComplete(ctx, sourceID, expectedCount)
+}
+
 type fakeGitHubClient struct {
 	repos     map[string]gh.Repository
 	languages map[string]map[string]int

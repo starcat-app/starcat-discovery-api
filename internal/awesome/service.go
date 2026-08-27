@@ -35,6 +35,7 @@ type Store interface {
 	ReplaceAwesomeSourceLanguages(context.Context, string, map[string]int) error
 	ReplaceAwesomeSnapshot(context.Context, string, string, string, string, []model.Repository, []model.AwesomeEntry, model.AwesomeSyncRun) error
 	ListPublishedAwesomeEntries(context.Context, string) ([]model.AwesomeEntry, error)
+	AwesomeRepositoryFactsComplete(context.Context, string, int) (bool, error)
 }
 
 // GitHubClient is deliberately limited to public repository and README facts.
@@ -245,7 +246,11 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 	if err != nil {
 		return run, mapGitHubError(err, "读取来源 README 失败")
 	}
-	if readme.SHA != "" && readme.SHA == source.LastSuccessfulSHA {
+	factsComplete, err := s.store.AwesomeRepositoryFactsComplete(ctx, source.ID, source.GitHubRepoCount)
+	if err != nil {
+		return run, err
+	}
+	if readme.SHA != "" && readme.SHA == source.LastSuccessfulSHA && factsComplete {
 		run.Status = "succeeded"
 		run.ReadmeSHA = readme.SHA
 		run.GitHubCount = source.GitHubRepoCount

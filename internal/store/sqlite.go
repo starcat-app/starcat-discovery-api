@@ -229,7 +229,20 @@ func (s *SQLiteStore) PruneReposNotIn(ctx context.Context, keepIDs []int64) (int
 	if len(args) == 0 {
 		return 0, fmt.Errorf("keep ids must contain positive repo ids")
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM repos WHERE gh_repo_id NOT IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	// Discovery 全量同步只拥有普通目录候选集，不能顺手删除 Awesome 快照仍在引用的
+	// 仓库事实。awesome_entries 对 repos 使用 ON DELETE SET NULL；若这里误删，来源计数
+	// 仍保留但公开查询的 INNER JOIN 会静默丢行，最终出现“目录 130、列表 2”的断裂。
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM repos
+		WHERE gh_repo_id NOT IN (`+strings.Join(placeholders, ",")+`)
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM awesome_entries ae
+			WHERE ae.gh_repo_id = repos.gh_repo_id
+			  AND ae.is_active = 1
+			  AND ae.target_type = 'github_repo'
+		  )
+	`, args...)
 	if err != nil {
 		return 0, err
 	}

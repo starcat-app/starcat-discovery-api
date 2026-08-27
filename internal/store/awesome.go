@@ -383,6 +383,34 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 	return entries, rows.Err()
 }
 
+// AwesomeRepositoryFactsComplete 判断来源快照中的 GitHub 关系是否仍能关联到完整仓库事实。
+//
+// README SHA 只能证明链接清单没有变化，不能证明共享 repos 表仍完整。普通 Discovery
+// 全量同步曾可能删除这些行并通过 ON DELETE SET NULL 清空 gh_repo_id，因此必须同时核对
+// 活跃关系数、非空 repo id 数和可关联仓库数，缺一项都应触发 Awesome 自愈重建。
+func (s *SQLiteStore) AwesomeRepositoryFactsComplete(
+	ctx context.Context,
+	sourceID string,
+	expectedCount int,
+) (bool, error) {
+	var activeCount, linkedIDCount, repositoryCount int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(e.gh_repo_id), COUNT(r.gh_repo_id)
+		FROM awesome_entries e
+		LEFT JOIN repos r ON r.gh_repo_id = e.gh_repo_id
+		WHERE e.source_id = ?
+		  AND e.is_active = 1
+		  AND e.target_type = 'github_repo'
+	`, sourceID).Scan(&activeCount, &linkedIDCount, &repositoryCount)
+	if err != nil {
+		return false, err
+	}
+	return expectedCount > 0 &&
+		activeCount == expectedCount &&
+		linkedIDCount == activeCount &&
+		repositoryCount == activeCount, nil
+}
+
 func upsertAwesomeRepo(ctx context.Context, tx *sql.Tx, repo model.Repository, now time.Time) error {
 	if repo.GhRepoID <= 0 || repo.FullName == "" || repo.Owner == "" || repo.Name == "" {
 		return fmt.Errorf("invalid Awesome repository %q", repo.FullName)
