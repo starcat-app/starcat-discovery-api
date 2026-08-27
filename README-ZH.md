@@ -151,6 +151,14 @@ Awesome 使用独立来源目录和单来源 entries 快照，不并入 discover
 
 星标历史接口必填稳定 GitHub `repo_id`。缓存命中返回带 `ETag` 和 `Cache-Control` 的 `200`；公开仓库首次 miss 经 ID 与 owner/name 校验后返回 `202 + Retry-After: 5`，由有界 worker 异步构建。私有仓库会被拒绝。完整响应和错误契约见 [`docs/api.md`](docs/api.md)。
 
+## 运营与调用指标
+
+- `GET /internal/stats`（API Key）：目录、榜单、Star History、Awesome 与同步任务聚合状态。
+- `GET /internal/sync-runs?limit=1..100`（Admin Key）：受限近期 Discovery 同步记录，不返回错误原文。
+- `GET /internal/metrics/{summary,timeseries,routes,status-codes}`（API Key）：路由调用量、错误与延迟聚合。
+
+指标不会保存凭据、查询串、请求体、客户端地址或真实路径参数。
+
 ## 同步与分类逻辑
 
 ### 轻量同步

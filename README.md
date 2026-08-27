@@ -151,6 +151,14 @@ Awesome uses an independent source catalog and per-source entries snapshots; it 
 
 The star-history endpoint requires a stable GitHub `repo_id`. A cache hit returns `200` with `ETag` and `Cache-Control`; the first valid public-repository miss returns `202` plus `Retry-After: 5` while a bounded worker prepares the cache. The service rejects private repositories and verifies that the ID still matches `owner/repo`. See [`docs/api.md`](docs/api.md) for the complete response and error contract.
 
+## Operations and Metrics
+
+- `GET /internal/stats` (API Key): catalog, ranking, Star History, Awesome, and sync aggregate state.
+- `GET /internal/sync-runs?limit=1..100` (Admin Key): bounded recent Discovery sync records without raw error messages.
+- `GET /internal/metrics/{summary,timeseries,routes,status-codes}` (API Key): aggregate route traffic, errors, and latency.
+
+Metrics exclude credentials, queries, bodies, client addresses, and real path parameters.
+
 ## Synchronization and Classification
 
 ### Light Sync
