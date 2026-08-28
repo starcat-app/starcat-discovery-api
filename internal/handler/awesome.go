@@ -63,6 +63,9 @@ func (h *AwesomeHandler) HandleEntries(w http.ResponseWriter, r *http.Request) {
 		if serviceErr != nil {
 			return awesomeCachedResponse{}, serviceErr
 		}
+		// Public API 的最后一道防线：即使数据库仍残留旧版外链快照，也只允许独立
+		// GitHub 仓库离开服务边界，避免缓存或历史数据再次污染客户端。
+		snapshot.Entries = publishedGitHubRepositories(snapshot.Entries)
 		return newAwesomeCachedResponse(snapshot, &model.Meta{
 			Total: len(snapshot.Entries), GeneratedAt: snapshot.Source.UpdatedAt.Format(time.RFC3339),
 		})
@@ -72,6 +75,16 @@ func (h *AwesomeHandler) HandleEntries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAwesomeCachedResponse(w, r, response)
+}
+
+func publishedGitHubRepositories(entries []model.AwesomeEntry) []model.AwesomeEntry {
+	filtered := make([]model.AwesomeEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.TargetType == "github_repo" && entry.GhRepoID != nil && entry.FullName != "" {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func sourceCard(source model.AwesomeSource) model.AwesomeSourceCard {
@@ -90,8 +103,9 @@ func sourceCard(source model.AwesomeSource) model.AwesomeSourceCard {
 		SourceWatchers: source.SourceWatchers, SourceSubscribers: source.SourceSubscribers,
 		SourceOpenIssues: source.SourceOpenIssues, SourceLanguage: source.SourceLanguage,
 		LanguageBytes: languageBytes, GitHubRepoCount: source.GitHubRepoCount,
-		ExternalEntryCount: source.ExternalEntryCount,
-		ResourceEntryCount: source.ResourceEntryCount,
+		// 旧字段继续保留以维持 JSON 契约，但公开目录不再发布任何非仓库条目。
+		ExternalEntryCount: 0,
+		ResourceEntryCount: 0,
 		LastSyncedAt:       source.LastSyncedAt, UpdatedAt: source.UpdatedAt,
 	}
 }

@@ -17,6 +17,7 @@ func TestAwesomeSourcesETagReturns304(t *testing.T) {
 		RepoURL: "https://github.com/owner/repo", RepoDescription: "GitHub repository description",
 		Status: model.AwesomeSourcePublished, SourceStars: 123, SourceForks: 45,
 		SourceWatchers: 123, SourceSubscribers: 9, SourceOpenIssues: 7, SourceLanguage: "Swift",
+		ExternalEntryCount: 8, ResourceEntryCount: 9,
 		LanguageBytes: map[string]int{"Swift": 10_000, "Shell": 500},
 		UpdatedAt:     time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
 	}}}
@@ -36,6 +37,10 @@ func TestAwesomeSourcesETagReturns304(t *testing.T) {
 		!strings.Contains(first.Body.String(), `"source_language":"Swift"`) ||
 		!strings.Contains(first.Body.String(), `"language_bytes":{"Shell":500,"Swift":10000}`) {
 		t.Fatalf("source repository facts missing from public catalog: %s", first.Body.String())
+	}
+	if !strings.Contains(first.Body.String(), `"external_entry_count":0`) ||
+		!strings.Contains(first.Body.String(), `"resource_entry_count":0`) {
+		t.Fatalf("public catalog leaked non-GitHub counts: %s", first.Body.String())
 	}
 	secondRequest := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources", nil)
 	secondRequest.Header.Set("If-None-Match", first.Header().Get("ETag"))
@@ -94,7 +99,7 @@ func TestAwesomeEntriesAlwaysIncludeRepositoryFacts(t *testing.T) {
 	service := stubAwesomePublicService{snapshot: model.AwesomeEntriesSnapshot{
 		Source: model.AwesomeEntriesSource{ID: "awesome-mac", DisplayName: "Awesome Mac", UpdatedAt: updatedAt},
 		Entries: []model.AwesomeEntry{{
-			GhRepoID: ptr(int64(42)), FullName: "owner/repo", EntryTitle: "Repo",
+			TargetType: "github_repo", GhRepoID: ptr(int64(42)), FullName: "owner/repo", EntryTitle: "Repo",
 			DefaultBranch: "main", UpdatedAt: "2026-08-24T00:00:00Z", CreatedAt: "2020-01-01T00:00:00Z",
 			Topics: []string{}, SectionPath: []string{"Apps"}, SourceAnchorURL: "https://example.com#apps",
 		}},
@@ -119,7 +124,7 @@ func TestAwesomeEntriesAlwaysIncludeRepositoryFacts(t *testing.T) {
 	}
 }
 
-func TestAwesomeEntriesExposeResourceTypeAndURLWithoutFakeRepositoryFacts(t *testing.T) {
+func TestAwesomeEntriesExcludeNonGitHubResourcesAtPublicBoundary(t *testing.T) {
 	updatedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	service := stubAwesomePublicService{snapshot: model.AwesomeEntriesSnapshot{
 		Source: model.AwesomeEntriesSource{ID: "design", DisplayName: "Design", UpdatedAt: updatedAt},
@@ -138,16 +143,11 @@ func TestAwesomeEntriesExposeResourceTypeAndURLWithoutFakeRepositoryFacts(t *tes
 	if response.Code != http.StatusOK {
 		t.Fatalf("response = %d, body=%q", response.Code, response.Body.String())
 	}
-	for _, required := range []string{
-		`"target_type":"external_resource"`, `"raw_url":"https://getdesign.md/resource"`,
-		`"entry_title":"Design resource"`, `"stars":0`,
-	} {
-		if !strings.Contains(response.Body.String(), required) {
-			t.Fatalf("resource field %s missing: %s", required, response.Body.String())
-		}
+	if !strings.Contains(response.Body.String(), `"entries":[]`) {
+		t.Fatalf("public response must exclude non-GitHub resources: %s", response.Body.String())
 	}
-	if strings.Contains(response.Body.String(), `"gh_repo_id"`) {
-		t.Fatalf("resource must not invent repository identity: %s", response.Body.String())
+	if strings.Contains(response.Body.String(), "getdesign.md") {
+		t.Fatalf("external URL leaked into public response: %s", response.Body.String())
 	}
 }
 

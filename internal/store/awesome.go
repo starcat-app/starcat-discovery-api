@@ -344,9 +344,8 @@ func (s *SQLiteStore) UpsertAwesomeRepositories(ctx context.Context, repos []mod
 	return tx.Commit()
 }
 
-// ListPublishedAwesomeEntries returns every active catalog entry. GitHub rows carry verified
-// repository facts; resource rows intentionally leave repository-only facts empty rather than
-// inventing stars, forks or timestamps.
+// ListPublishedAwesomeEntries 只返回经过 GitHub 核验并能关联真实仓库事实的条目。
+// 旧版 external/resource 行可能仍存在于数据库中，但不得越过公开读取边界。
 func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID string) ([]model.AwesomeEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT e.source_id, e.target_type, e.target_key, e.gh_repo_id,
@@ -360,8 +359,9 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 		       e.section_path_json, e.raw_url, e.source_anchor_url, e.entry_order
 		FROM awesome_entries e
 		JOIN awesome_sources s ON s.id = e.source_id AND s.status = 'published'
-		LEFT JOIN repos r ON r.gh_repo_id = e.gh_repo_id
+		JOIN repos r ON r.gh_repo_id = e.gh_repo_id
 		WHERE e.source_id = ? AND e.is_active = 1
+		  AND e.target_type = 'github_repo'
 		ORDER BY e.entry_order ASC, e.target_key ASC
 	`, sourceID)
 	if err != nil {

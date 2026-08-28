@@ -261,7 +261,11 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 	if err != nil {
 		return run, err
 	}
-	if readme.SHA != "" && readme.SHA == source.LastSuccessfulSHA && factsComplete {
+	// Awesome 面向客户端展示的是独立 GitHub 仓库。旧版本曾允许外部网页和仓库内文件
+	// 进入快照，因此即使 README SHA 未变化，只要旧计数仍存在也必须强制重建一次，
+	// 否则 SHA 快路径会让已经废弃的条目永久残留在生产数据中。
+	githubOnlySnapshot := source.ExternalEntryCount == 0 && source.ResourceEntryCount == 0
+	if readme.SHA != "" && readme.SHA == source.LastSuccessfulSHA && factsComplete && githubOnlySnapshot {
 		run.Status = "succeeded"
 		run.ReadmeSHA = readme.SHA
 		run.GitHubCount = source.GitHubRepoCount
@@ -335,27 +339,17 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 	return run, nil
 }
 
-// entriesForProfile 让内容管理配置决定“哪些链接是该来源的有效条目”。
-// generic 继续保持传统 Awesome 的 GitHub 仓库语义；另外两种 profile 才接纳
-// 外站资源或当前仓库内的深层文件，避免普通来源误把导航链接发布成项目。
+// entriesForProfile 保留 profile 参数以兼容现有内容管理数据，但所有 profile 的发布
+// 口径统一为“独立 GitHub 仓库”。外部网页和仓库内文件仍可被解析器识别并计入 ignored，
+// 便于运营排查 README 结构，但绝不能进入面向 Starcat 的生产快照。
 func entriesForProfile(
-	profile model.AwesomeParserProfile,
+	_ model.AwesomeParserProfile,
 	entries []model.AwesomeEntry,
 	ignoredCount int,
 ) ([]model.AwesomeEntry, int) {
-	allowed := func(targetType string) bool {
-		switch profile {
-		case model.AwesomeParserExternalCatalog:
-			return targetType == "github_repo" || targetType == "external_resource"
-		case model.AwesomeParserRepositoryResources:
-			return targetType == "github_repo" || targetType == "repository_resource"
-		default:
-			return targetType == "github_repo"
-		}
-	}
 	filtered := make([]model.AwesomeEntry, 0, len(entries))
 	for _, entry := range entries {
-		if allowed(entry.TargetType) {
+		if entry.TargetType == "github_repo" {
 			filtered = append(filtered, entry)
 		} else {
 			ignoredCount++

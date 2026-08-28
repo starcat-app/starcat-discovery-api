@@ -57,7 +57,7 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatalf("created status = %q", created.Status)
 	}
 	run, err := service.SyncSource(ctx, created.ID, "manual")
-	if err != nil || run.Status != "succeeded" || run.GitHubCount != 1 || run.ExternalCount != 1 || run.DuplicateCount != 1 {
+	if err != nil || run.Status != "succeeded" || run.GitHubCount != 1 || run.ExternalCount != 0 || run.DuplicateCount != 1 {
 		t.Fatalf("SyncSource() = %+v, %v", run, err)
 	}
 	ready, err := sqliteStore.GetAwesomeSource(ctx, created.ID)
@@ -73,8 +73,7 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatalf("PublishSource() error = %v", err)
 	}
 	snapshot, err := service.PublishedEntries(ctx, created.ID)
-	if err != nil || len(snapshot.Entries) != 2 || snapshot.Entries[0].FullName != "Example/Alpha" ||
-		snapshot.Entries[1].TargetType != "external_resource" {
+	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].FullName != "Example/Alpha" {
 		t.Fatalf("published snapshot = %+v, %v", snapshot, err)
 	}
 	if snapshot.Entries[0].UpdatedAt != "2026-08-23T12:34:56Z" {
@@ -109,8 +108,7 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatal("expected second sync failure")
 	}
 	snapshot, err = service.PublishedEntries(ctx, created.ID)
-	if err != nil || len(snapshot.Entries) != 2 || snapshot.Entries[0].FullName != "Example/Alpha" ||
-		snapshot.Entries[1].TargetType != "external_resource" {
+	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].FullName != "Example/Alpha" {
 		t.Fatalf("failed sync replaced previous snapshot: %+v, %v", snapshot, err)
 	}
 	runs, err := service.SyncRuns(ctx, created.ID)
@@ -128,7 +126,7 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	}
 }
 
-func TestEntriesForProfileKeepsOnlyConfiguredTargetTypes(t *testing.T) {
+func TestEntriesForProfileKeepsOnlyIndependentGitHubRepositories(t *testing.T) {
 	entries := []model.AwesomeEntry{
 		{TargetType: "github_repo"},
 		{TargetType: "external_resource"},
@@ -141,8 +139,8 @@ func TestEntriesForProfileKeepsOnlyConfiguredTargetTypes(t *testing.T) {
 		want    []string
 	}{
 		{name: "generic", profile: model.AwesomeParserGeneric, want: []string{"github_repo"}},
-		{name: "external catalog", profile: model.AwesomeParserExternalCatalog, want: []string{"github_repo", "external_resource"}},
-		{name: "repository resources", profile: model.AwesomeParserRepositoryResources, want: []string{"github_repo", "repository_resource"}},
+		{name: "external catalog", profile: model.AwesomeParserExternalCatalog, want: []string{"github_repo"}},
+		{name: "repository resources", profile: model.AwesomeParserRepositoryResources, want: []string{"github_repo"}},
 	}
 
 	for _, test := range tests {
@@ -160,6 +158,61 @@ func TestEntriesForProfileKeepsOnlyConfiguredTargetTypes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServiceRebuildsUnchangedLegacySnapshotContainingExternalEntries(t *testing.T) {
+	ctx := context.Background()
+	sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "awesome.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqliteStore.Close()
+	fake := &fakeGitHubClient{
+		repos: map[string]gh.Repository{
+			"acme/awesome": sourceRepository(),
+			"example/alpha": {
+				ID: 2, FullName: "example/alpha", Name: "alpha", DefaultBranch: "main",
+				Owner: gh.Owner{Login: "example"},
+			},
+		},
+		readme: gh.README{
+			Path: "README.md", SHA: "same-sha",
+			Content: []byte("- [Alpha](https://github.com/example/alpha)\n"),
+		},
+	}
+	service := NewService(sqliteStore, fake)
+	created, err := service.CreateSource(ctx, model.AwesomeSource{
+		ID: "legacy", RepoFullName: "acme/awesome", DisplayName: "Legacy",
+		ParserProfile: model.AwesomeParserExternalCatalog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRun := model.AwesomeSyncRun{
+		ID: "legacy-run", SourceID: created.ID, Status: "running", Trigger: "manual", StartedAt: time.Now().UTC(),
+	}
+	if _, err := sqliteStore.StartAwesomeSyncRun(ctx, legacyRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqliteStore.ReplaceAwesomeSnapshot(
+		ctx, created.ID, "main", "README.md", "same-sha", nil,
+		[]model.AwesomeEntry{{
+			SourceID: created.ID, TargetType: "external_resource", TargetKey: "url:https://example.com",
+			EntryTitle: "Legacy external resource", RawURL: "https://example.com", EntryOrder: 1,
+		}},
+		legacyRun,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	run, err := service.SyncSource(ctx, created.ID, "manual")
+	if err != nil || run.GitHubCount != 1 || run.ExternalCount != 0 || run.ResourceCount != 0 {
+		t.Fatalf("SyncSource() = %+v, %v", run, err)
+	}
+	updated, err := sqliteStore.GetAwesomeSource(ctx, created.ID)
+	if err != nil || updated.GitHubRepoCount != 1 || updated.ExternalEntryCount != 0 || updated.ResourceEntryCount != 0 {
+		t.Fatalf("updated source = %+v, %v", updated, err)
 	}
 }
 
@@ -181,7 +234,7 @@ func TestServicePublishRequiresSuccessfulNonEmptySync(t *testing.T) {
 	}
 }
 
-func TestServicePublishesResourceOnlyCatalog(t *testing.T) {
+func TestServiceRejectsCatalogWithoutIndependentGitHubRepositories(t *testing.T) {
 	ctx := context.Background()
 	sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "awesome.db"))
 	if err != nil {
@@ -204,15 +257,11 @@ func TestServicePublishesResourceOnlyCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	run, err := service.SyncSource(ctx, created.ID, "manual")
-	if err != nil || run.ExternalCount != 1 || run.GitHubCount != 0 {
+	if err == nil || run.Status != "failed" || run.ExternalCount != 0 || run.GitHubCount != 0 {
 		t.Fatalf("SyncSource() = %+v, %v", run, err)
 	}
-	if _, err := service.PublishSource(ctx, created.ID); err != nil {
-		t.Fatalf("PublishSource() error = %v", err)
-	}
-	snapshot, err := service.PublishedEntries(ctx, created.ID)
-	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].TargetType != "external_resource" {
-		t.Fatalf("PublishedEntries() = %+v, %v", snapshot, err)
+	if _, err := service.PublishSource(ctx, created.ID); err == nil {
+		t.Fatal("resource-only source must not become public")
 	}
 }
 
