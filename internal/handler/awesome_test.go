@@ -119,6 +119,38 @@ func TestAwesomeEntriesAlwaysIncludeRepositoryFacts(t *testing.T) {
 	}
 }
 
+func TestAwesomeEntriesExposeResourceTypeAndURLWithoutFakeRepositoryFacts(t *testing.T) {
+	updatedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	service := stubAwesomePublicService{snapshot: model.AwesomeEntriesSnapshot{
+		Source: model.AwesomeEntriesSource{ID: "design", DisplayName: "Design", UpdatedAt: updatedAt},
+		Entries: []model.AwesomeEntry{{
+			TargetType: "external_resource", EntryTitle: "Design resource",
+			EntryDescription: "A reusable design reference.", RawURL: "https://getdesign.md/resource",
+			Topics: []string{}, SectionPath: []string{"Resources"}, EntryOrder: 1,
+		}},
+	}}
+	handler := NewAwesomeHandler(service)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/awesome/sources/design/entries", nil)
+	request.SetPathValue("source_id", "design")
+	handler.HandleEntries(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d, body=%q", response.Code, response.Body.String())
+	}
+	for _, required := range []string{
+		`"target_type":"external_resource"`, `"raw_url":"https://getdesign.md/resource"`,
+		`"entry_title":"Design resource"`, `"stars":0`,
+	} {
+		if !strings.Contains(response.Body.String(), required) {
+			t.Fatalf("resource field %s missing: %s", required, response.Body.String())
+		}
+	}
+	if strings.Contains(response.Body.String(), `"gh_repo_id"`) {
+		t.Fatalf("resource must not invent repository identity: %s", response.Body.String())
+	}
+}
+
 type stubAwesomePublicService struct {
 	sources  []model.AwesomeSource
 	snapshot model.AwesomeEntriesSnapshot

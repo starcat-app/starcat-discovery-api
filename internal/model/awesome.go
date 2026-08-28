@@ -12,60 +12,74 @@ const (
 	AwesomeSourceArchived  AwesomeSourceStatus = "archived"
 )
 
+// AwesomeParserProfile 是内容管理选择的解析意图，不绑定具体仓库名称。
+// 解析器仍共享同一套 AST 基础能力，profile 只控制发布门禁和运营可见语义。
+type AwesomeParserProfile string
+
+const (
+	AwesomeParserGeneric             AwesomeParserProfile = "generic"
+	AwesomeParserExternalCatalog     AwesomeParserProfile = "external_catalog"
+	AwesomeParserRepositoryResources AwesomeParserProfile = "repository_resources"
+)
+
 // AwesomeSource 保存运营字段、同步新鲜度和发布门禁所需事实。
 type AwesomeSource struct {
-	ID                 string              `json:"id"`
-	RepoFullName       string              `json:"repo_full_name"`
-	RepoURL            string              `json:"repo_url,omitempty"`
-	DisplayName        string              `json:"display_name"`
-	RepoDescription    string              `json:"repo_description,omitempty"`
-	ImageURL           string              `json:"image_url,omitempty"`
-	SummaryZH          string              `json:"summary_zh,omitempty"`
-	SummaryEN          string              `json:"summary_en,omitempty"`
-	Featured           bool                `json:"featured"`
-	SortOrder          int                 `json:"sort_order"`
-	Status             AwesomeSourceStatus `json:"status"`
-	Revision           int                 `json:"revision"`
-	DefaultBranch      string              `json:"default_branch,omitempty"`
-	ReadmePath         string              `json:"readme_path,omitempty"`
-	LastSuccessfulSHA  string              `json:"last_successful_sha,omitempty"`
-	SourceStars        int                 `json:"source_stars"`
-	SourceForks        int                 `json:"source_forks"`
-	SourceWatchers     int                 `json:"source_watchers"`
-	SourceSubscribers  int                 `json:"source_subscribers"`
-	SourceOpenIssues   int                 `json:"source_open_issues"`
-	SourceLanguage     string              `json:"source_language,omitempty"`
-	LanguageBytes      map[string]int      `json:"language_bytes,omitempty"`
-	GitHubRepoCount    int                 `json:"github_repo_count"`
-	ExternalEntryCount int                 `json:"external_entry_count"`
-	LastSyncedAt       *time.Time          `json:"last_synced_at,omitempty"`
-	CreatedAt          time.Time           `json:"created_at"`
-	UpdatedAt          time.Time           `json:"updated_at"`
+	ID                 string               `json:"id"`
+	RepoFullName       string               `json:"repo_full_name"`
+	RepoURL            string               `json:"repo_url,omitempty"`
+	DisplayName        string               `json:"display_name"`
+	RepoDescription    string               `json:"repo_description,omitempty"`
+	ImageURL           string               `json:"image_url,omitempty"`
+	SummaryZH          string               `json:"summary_zh,omitempty"`
+	SummaryEN          string               `json:"summary_en,omitempty"`
+	Featured           bool                 `json:"featured"`
+	SortOrder          int                  `json:"sort_order"`
+	ParserProfile      AwesomeParserProfile `json:"parser_profile"`
+	Status             AwesomeSourceStatus  `json:"status"`
+	Revision           int                  `json:"revision"`
+	DefaultBranch      string               `json:"default_branch,omitempty"`
+	ReadmePath         string               `json:"readme_path,omitempty"`
+	LastSuccessfulSHA  string               `json:"last_successful_sha,omitempty"`
+	SourceStars        int                  `json:"source_stars"`
+	SourceForks        int                  `json:"source_forks"`
+	SourceWatchers     int                  `json:"source_watchers"`
+	SourceSubscribers  int                  `json:"source_subscribers"`
+	SourceOpenIssues   int                  `json:"source_open_issues"`
+	SourceLanguage     string               `json:"source_language,omitempty"`
+	LanguageBytes      map[string]int       `json:"language_bytes,omitempty"`
+	GitHubRepoCount    int                  `json:"github_repo_count"`
+	ExternalEntryCount int                  `json:"external_entry_count"`
+	ResourceEntryCount int                  `json:"resource_entry_count"`
+	LastSyncedAt       *time.Time           `json:"last_synced_at,omitempty"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
 // AwesomeSourceCard is the public source-catalog contract consumed by Starcat.
 type AwesomeSourceCard struct {
-	ID                 string         `json:"id"`
-	DisplayName        string         `json:"display_name"`
-	RepoFullName       string         `json:"repo_full_name"`
-	RepoURL            string         `json:"repo_url"`
-	RepoDescription    string         `json:"repo_description,omitempty"`
-	ImageURL           string         `json:"image_url,omitempty"`
-	SummaryZH          string         `json:"summary_zh,omitempty"`
-	SummaryEN          string         `json:"summary_en,omitempty"`
-	Featured           bool           `json:"featured"`
-	SortOrder          int            `json:"sort_order"`
-	SourceStars        int            `json:"source_stars"`
-	SourceForks        int            `json:"source_forks"`
-	SourceWatchers     int            `json:"source_watchers"`
-	SourceSubscribers  int            `json:"source_subscribers"`
-	SourceOpenIssues   int            `json:"source_open_issues"`
-	SourceLanguage     string         `json:"source_language,omitempty"`
-	LanguageBytes      map[string]int `json:"language_bytes"`
-	GitHubRepoCount    int            `json:"github_repo_count"`
-	ExternalEntryCount int            `json:"external_entry_count"`
-	LastSyncedAt       *time.Time     `json:"last_synced_at,omitempty"`
-	UpdatedAt          time.Time      `json:"updated_at"`
+	ID                 string               `json:"id"`
+	DisplayName        string               `json:"display_name"`
+	RepoFullName       string               `json:"repo_full_name"`
+	RepoURL            string               `json:"repo_url"`
+	RepoDescription    string               `json:"repo_description,omitempty"`
+	ImageURL           string               `json:"image_url,omitempty"`
+	SummaryZH          string               `json:"summary_zh,omitempty"`
+	SummaryEN          string               `json:"summary_en,omitempty"`
+	Featured           bool                 `json:"featured"`
+	SortOrder          int                  `json:"sort_order"`
+	ParserProfile      AwesomeParserProfile `json:"parser_profile"`
+	SourceStars        int                  `json:"source_stars"`
+	SourceForks        int                  `json:"source_forks"`
+	SourceWatchers     int                  `json:"source_watchers"`
+	SourceSubscribers  int                  `json:"source_subscribers"`
+	SourceOpenIssues   int                  `json:"source_open_issues"`
+	SourceLanguage     string               `json:"source_language,omitempty"`
+	LanguageBytes      map[string]int       `json:"language_bytes"`
+	GitHubRepoCount    int                  `json:"github_repo_count"`
+	ExternalEntryCount int                  `json:"external_entry_count"`
+	ResourceEntryCount int                  `json:"resource_entry_count"`
+	LastSyncedAt       *time.Time           `json:"last_synced_at,omitempty"`
+	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
 // AwesomeEntry 是 README 中一条可审计的来源事实。
@@ -73,7 +87,7 @@ type AwesomeSourceCard struct {
 // 外部链接也持久化用于运营统计，但公共 entries API 只读取 GitHub Repo 条目。
 type AwesomeEntry struct {
 	SourceID         string   `json:"-"`
-	TargetType       string   `json:"-"`
+	TargetType       string   `json:"target_type"`
 	TargetKey        string   `json:"-"`
 	GhRepoID         *int64   `json:"gh_repo_id,omitempty"`
 	Owner            string   `json:"owner,omitempty"`
@@ -99,7 +113,7 @@ type AwesomeEntry struct {
 	EntryTitle       string   `json:"entry_title"`
 	EntryDescription string   `json:"entry_description,omitempty"`
 	SectionPath      []string `json:"section_path"`
-	RawURL           string   `json:"-"`
+	RawURL           string   `json:"raw_url"`
 	SourceAnchorURL  string   `json:"source_anchor_url"`
 	EntryOrder       int      `json:"entry_order"`
 	FirstSeenSHA     string   `json:"-"`
@@ -115,6 +129,9 @@ type AwesomeSyncRun struct {
 	ReadmeSHA      string     `json:"readme_sha,omitempty"`
 	GitHubCount    int        `json:"github_count"`
 	ExternalCount  int        `json:"external_count"`
+	ResourceCount  int        `json:"resource_count"`
+	ExtractedCount int        `json:"extracted_count"`
+	IgnoredCount   int        `json:"ignored_count"`
 	InvalidCount   int        `json:"invalid_count"`
 	DuplicateCount int        `json:"duplicate_count"`
 	ErrorCode      string     `json:"error_code,omitempty"`

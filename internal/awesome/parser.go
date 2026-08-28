@@ -12,6 +12,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
 
@@ -26,14 +27,17 @@ var descriptionPrefixPattern = regexp.MustCompile(`^[\s\-–—:：|]+`)
 // ParseResult contains both publishable GitHub candidates and external audit facts.
 type ParseResult struct {
 	Entries        []model.AwesomeEntry
+	ExtractedCount int
+	IgnoredCount   int
 	InvalidCount   int
 	DuplicateCount int
 }
 
-// ParseREADME parses list links from a bounded CommonMark/GFM AST.
+// ParseREADME parses entry-like links from a bounded CommonMark/GFM AST.
 //
-// The AST boundary is intentional: regex-scanning the whole README would mistake badges,
-// prose links and table-of-contents anchors for project entries.
+// Real Awesome repositories use lists, blockquotes generated inside details blocks, and
+// tables. The AST boundary is intentional: regex-scanning the whole README would mistake
+// badges, prose links and table-of-contents anchors for project entries.
 func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseResult, error) {
 	if len(source) == 0 {
 		return ParseResult{}, errors.New("README is empty")
@@ -61,26 +65,29 @@ func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseR
 			section = updateSection(section, heading.Level, cleanText(string(heading.Text(source))))
 			return ast.WalkContinue, nil
 		}
-		item, ok := node.(*ast.ListItem)
-		if !ok {
+		if !isEntryContainer(node) {
 			return ast.WalkContinue, nil
 		}
 
-		links := directListItemLinks(item)
+		links := directContainerLinks(node)
 		for _, link := range links {
+			result.ExtractedCount++
 			if hasImageDescendant(link) {
+				result.IgnoredCount++
 				continue
 			}
 			rawURL := strings.TrimSpace(string(link.Destination))
 			if shouldIgnoreLink(rawURL) {
+				result.IgnoredCount++
 				continue
 			}
-			target, normalizeErr := NormalizeTarget(rawURL)
+			target, normalizeErr := NormalizeTargetForSource(rawURL, sourceRepo)
 			if normalizeErr != nil {
 				result.InvalidCount++
 				continue
 			}
 			if target.Type == "github_repo" && strings.EqualFold(target.RepoFullName, sourceRepo) {
+				result.IgnoredCount++
 				continue
 			}
 			if _, exists := seen[target.Key]; exists {
@@ -102,7 +109,7 @@ func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseR
 				TargetType:       target.Type,
 				TargetKey:        target.Key,
 				EntryTitle:       title,
-				EntryDescription: listItemDescription(item, link, source),
+				EntryDescription: containerDescription(node, link, source),
 				SectionPath:      append([]string(nil), section...),
 				RawURL:           target.URL,
 				SourceAnchorURL:  sourceAnchorURL(readmeURL, section),
@@ -117,6 +124,15 @@ func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseR
 		return ParseResult{}, err
 	}
 	return result, nil
+}
+
+func isEntryContainer(node ast.Node) bool {
+	switch node.(type) {
+	case *ast.ListItem, *ast.Blockquote, *extast.TableRow:
+		return true
+	default:
+		return false
+	}
 }
 
 func updateSection(current []string, level int, title string) []string {
@@ -134,12 +150,16 @@ func updateSection(current []string, level int, title string) []string {
 }
 
 func directListItemLinks(item *ast.ListItem) []*ast.Link {
+	return directContainerLinks(item)
+}
+
+func directContainerLinks(container ast.Node) []*ast.Link {
 	links := make([]*ast.Link, 0, 1)
-	_ = ast.Walk(item, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering || node == item {
+	_ = ast.Walk(container, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering || node == container {
 			return ast.WalkContinue, nil
 		}
-		if nested, ok := node.(*ast.ListItem); ok && nested != item {
+		if isEntryContainer(node) {
 			return ast.WalkSkipChildren, nil
 		}
 		if link, ok := node.(*ast.Link); ok {
@@ -166,7 +186,11 @@ func hasImageDescendant(node ast.Node) bool {
 }
 
 func listItemDescription(item *ast.ListItem, primary *ast.Link, source []byte) string {
-	all := directListItemText(item, source)
+	return containerDescription(item, primary, source)
+}
+
+func containerDescription(container ast.Node, primary *ast.Link, source []byte) string {
+	all := directContainerText(container, source)
 	label := cleanText(string(primary.Text(source)))
 	if label != "" {
 		all = strings.TrimSpace(strings.TrimPrefix(all, label))
@@ -175,12 +199,16 @@ func listItemDescription(item *ast.ListItem, primary *ast.Link, source []byte) s
 }
 
 func directListItemText(item *ast.ListItem, source []byte) string {
+	return directContainerText(item, source)
+}
+
+func directContainerText(container ast.Node, source []byte) string {
 	parts := make([]string, 0, 8)
-	_ = ast.Walk(item, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering || node == item {
+	_ = ast.Walk(container, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering || node == container {
 			return ast.WalkContinue, nil
 		}
-		if nested, ok := node.(*ast.ListItem); ok && nested != item {
+		if isEntryContainer(node) {
 			return ast.WalkSkipChildren, nil
 		}
 		if _, ok := node.(*ast.Image); ok {

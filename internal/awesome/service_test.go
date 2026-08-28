@@ -48,6 +48,7 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	service := NewService(sqliteStore, fake, invalidation)
 	created, err := service.CreateSource(ctx, model.AwesomeSource{
 		ID: "awesome-test", RepoFullName: "acme/awesome", DisplayName: "Awesome Test",
+		ParserProfile: model.AwesomeParserExternalCatalog,
 	})
 	if err != nil {
 		t.Fatalf("CreateSource() error = %v", err)
@@ -72,7 +73,8 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatalf("PublishSource() error = %v", err)
 	}
 	snapshot, err := service.PublishedEntries(ctx, created.ID)
-	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].FullName != "Example/Alpha" {
+	if err != nil || len(snapshot.Entries) != 2 || snapshot.Entries[0].FullName != "Example/Alpha" ||
+		snapshot.Entries[1].TargetType != "external_resource" {
 		t.Fatalf("published snapshot = %+v, %v", snapshot, err)
 	}
 	if snapshot.Entries[0].UpdatedAt != "2026-08-23T12:34:56Z" {
@@ -107,7 +109,8 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 		t.Fatal("expected second sync failure")
 	}
 	snapshot, err = service.PublishedEntries(ctx, created.ID)
-	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].FullName != "Example/Alpha" {
+	if err != nil || len(snapshot.Entries) != 2 || snapshot.Entries[0].FullName != "Example/Alpha" ||
+		snapshot.Entries[1].TargetType != "external_resource" {
 		t.Fatalf("failed sync replaced previous snapshot: %+v, %v", snapshot, err)
 	}
 	runs, err := service.SyncRuns(ctx, created.ID)
@@ -122,6 +125,41 @@ func TestServiceManagedSourceLifecycleAndFailureKeepsSnapshot(t *testing.T) {
 	}
 	if invalidation.catalogCount < 6 || len(invalidation.sourceIDs) < 4 {
 		t.Fatalf("response cache invalidations = catalog:%d sources:%v", invalidation.catalogCount, invalidation.sourceIDs)
+	}
+}
+
+func TestEntriesForProfileKeepsOnlyConfiguredTargetTypes(t *testing.T) {
+	entries := []model.AwesomeEntry{
+		{TargetType: "github_repo"},
+		{TargetType: "external_resource"},
+		{TargetType: "repository_resource"},
+	}
+
+	tests := []struct {
+		name    string
+		profile model.AwesomeParserProfile
+		want    []string
+	}{
+		{name: "generic", profile: model.AwesomeParserGeneric, want: []string{"github_repo"}},
+		{name: "external catalog", profile: model.AwesomeParserExternalCatalog, want: []string{"github_repo", "external_resource"}},
+		{name: "repository resources", profile: model.AwesomeParserRepositoryResources, want: []string{"github_repo", "repository_resource"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ignored := entriesForProfile(test.profile, entries, 2)
+			if ignored != 2+len(entries)-len(test.want) {
+				t.Fatalf("ignored = %d", ignored)
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("entries = %+v", got)
+			}
+			for index, targetType := range test.want {
+				if got[index].TargetType != targetType {
+					t.Fatalf("entry[%d] = %q", index, got[index].TargetType)
+				}
+			}
+		})
 	}
 }
 
@@ -140,6 +178,41 @@ func TestServicePublishRequiresSuccessfulNonEmptySync(t *testing.T) {
 	}
 	if _, err := service.PublishSource(ctx, created.ID); err == nil {
 		t.Fatal("expected publish gate")
+	}
+}
+
+func TestServicePublishesResourceOnlyCatalog(t *testing.T) {
+	ctx := context.Background()
+	sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "awesome.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqliteStore.Close()
+	fake := &fakeGitHubClient{
+		repos: map[string]gh.Repository{"acme/awesome": sourceRepository()},
+		readme: gh.README{
+			Path: "README.md", SHA: "sha-resource",
+			Content: []byte("## Tools\n\n- [Design Tool](https://design.example/tool) - External resource.\n"),
+		},
+	}
+	service := NewService(sqliteStore, fake)
+	created, err := service.CreateSource(ctx, model.AwesomeSource{
+		ID: "resources", RepoFullName: "acme/awesome", DisplayName: "Resources",
+		ParserProfile: model.AwesomeParserExternalCatalog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.SyncSource(ctx, created.ID, "manual")
+	if err != nil || run.ExternalCount != 1 || run.GitHubCount != 0 {
+		t.Fatalf("SyncSource() = %+v, %v", run, err)
+	}
+	if _, err := service.PublishSource(ctx, created.ID); err != nil {
+		t.Fatalf("PublishSource() error = %v", err)
+	}
+	snapshot, err := service.PublishedEntries(ctx, created.ID)
+	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].TargetType != "external_resource" {
+		t.Fatalf("PublishedEntries() = %+v, %v", snapshot, err)
 	}
 }
 
@@ -262,12 +335,13 @@ type incompleteSnapshotStore struct {
 func (s *incompleteSnapshotStore) AwesomeRepositoryFactsComplete(
 	ctx context.Context,
 	sourceID string,
-	expectedCount int,
+	expectedGitHubCount int,
+	expectedEntryCount int,
 ) (bool, error) {
 	if s.forceIncomplete {
 		return false, nil
 	}
-	return s.SQLiteStore.AwesomeRepositoryFactsComplete(ctx, sourceID, expectedCount)
+	return s.SQLiteStore.AwesomeRepositoryFactsComplete(ctx, sourceID, expectedGitHubCount, expectedEntryCount)
 }
 
 type fakeGitHubClient struct {

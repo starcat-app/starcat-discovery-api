@@ -23,6 +23,9 @@ var (
 
 // CreateAwesomeSource 新建草稿来源；GitHub 核验由 service 在进入 Store 前完成。
 func (s *SQLiteStore) CreateAwesomeSource(ctx context.Context, source model.AwesomeSource) (model.AwesomeSource, error) {
+	if source.ParserProfile == "" {
+		source.ParserProfile = model.AwesomeParserGeneric
+	}
 	now := time.Now().UTC()
 	source.Status = model.AwesomeSourceDraft
 	source.Revision = 1
@@ -31,11 +34,11 @@ func (s *SQLiteStore) CreateAwesomeSource(ctx context.Context, source model.Awes
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO awesome_sources (
 			id, repo_full_name, display_name, image_url, summary_zh, summary_en,
-			featured, sort_order, status, revision, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			featured, sort_order, parser_profile, status, revision, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, source.ID, source.RepoFullName, source.DisplayName, nullable(source.ImageURL),
 		nullable(source.SummaryZH), nullable(source.SummaryEN), boolInt(source.Featured),
-		source.SortOrder, source.Status, source.Revision, timeString(now), timeString(now))
+		source.SortOrder, source.ParserProfile, source.Status, source.Revision, timeString(now), timeString(now))
 	if err != nil {
 		return model.AwesomeSource{}, err
 	}
@@ -44,14 +47,22 @@ func (s *SQLiteStore) CreateAwesomeSource(ctx context.Context, source model.Awes
 
 // UpdateAwesomeSource 使用 revision 做乐观并发，避免旧运营表单覆盖较新的内容。
 func (s *SQLiteStore) UpdateAwesomeSource(ctx context.Context, source model.AwesomeSource, expectedRevision int) (model.AwesomeSource, error) {
+	if source.ParserProfile == "" {
+		source.ParserProfile = model.AwesomeParserGeneric
+	}
 	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE awesome_sources SET
 			repo_full_name = ?, display_name = ?, image_url = ?, summary_zh = ?, summary_en = ?,
-			featured = ?, sort_order = ?, revision = revision + 1, updated_at = ?
+			featured = ?, sort_order = ?, parser_profile = ?,
+			last_successful_sha = CASE
+				WHEN repo_full_name <> ? COLLATE NOCASE OR parser_profile <> ? THEN NULL
+				ELSE last_successful_sha END,
+			revision = revision + 1, updated_at = ?
 		WHERE id = ? AND revision = ?
 	`, source.RepoFullName, source.DisplayName, nullable(source.ImageURL), nullable(source.SummaryZH),
-		nullable(source.SummaryEN), boolInt(source.Featured), source.SortOrder, timeString(now),
+		nullable(source.SummaryEN), boolInt(source.Featured), source.SortOrder, source.ParserProfile,
+		source.RepoFullName, source.ParserProfile, timeString(now),
 		source.ID, expectedRevision)
 	if err != nil {
 		return model.AwesomeSource{}, err
@@ -151,7 +162,8 @@ func (s *SQLiteStore) StartAwesomeSyncRun(ctx context.Context, run model.Awesome
 func (s *SQLiteStore) GetActiveAwesomeSyncRun(ctx context.Context, sourceID string) (model.AwesomeSyncRun, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, source_id, status, trigger_kind, readme_sha, github_count, external_count,
-		       invalid_count, duplicate_count, error_code, error_message, started_at, finished_at
+		       resource_count, extracted_count, ignored_count, invalid_count, duplicate_count,
+		       error_code, error_message, started_at, finished_at
 		FROM awesome_sync_runs
 		WHERE source_id = ? AND status IN ('queued', 'running')
 		ORDER BY started_at DESC, rowid DESC LIMIT 1
@@ -171,11 +183,13 @@ func (s *SQLiteStore) FinishAwesomeSyncRun(ctx context.Context, run model.Awesom
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE awesome_sync_runs SET
-			status = ?, readme_sha = ?, github_count = ?, external_count = ?,
-			invalid_count = ?, duplicate_count = ?, error_code = ?, error_message = ?, finished_at = ?
+			status = ?, readme_sha = ?, github_count = ?, external_count = ?, resource_count = ?,
+			extracted_count = ?, ignored_count = ?, invalid_count = ?, duplicate_count = ?,
+			error_code = ?, error_message = ?, finished_at = ?
 		WHERE id = ?
-	`, run.Status, nullable(run.ReadmeSHA), run.GitHubCount, run.ExternalCount,
-		run.InvalidCount, run.DuplicateCount, nullable(run.ErrorCode), nullable(run.ErrorMessage),
+	`, run.Status, nullable(run.ReadmeSHA), run.GitHubCount, run.ExternalCount, run.ResourceCount,
+		run.ExtractedCount, run.IgnoredCount, run.InvalidCount, run.DuplicateCount,
+		nullable(run.ErrorCode), nullable(run.ErrorMessage),
 		timeString(finishedAt), run.ID)
 	if err != nil {
 		return err
@@ -197,7 +211,8 @@ func (s *SQLiteStore) ListAwesomeSyncRuns(ctx context.Context, sourceID string, 
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, source_id, status, trigger_kind, readme_sha, github_count, external_count,
-		       invalid_count, duplicate_count, error_code, error_message, started_at, finished_at
+		       resource_count, extracted_count, ignored_count, invalid_count, duplicate_count,
+		       error_code, error_message, started_at, finished_at
 		FROM awesome_sync_runs WHERE source_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?
 	`, sourceID, limit)
 	if err != nil {
@@ -272,20 +287,23 @@ func (s *SQLiteStore) ReplaceAwesomeSnapshot(
 	}
 	githubCount := 0
 	externalCount := 0
+	resourceCount := 0
 	for _, entry := range entries {
 		if entry.TargetType == "github_repo" {
 			githubCount++
-		} else if entry.TargetType == "external" {
+		} else if entry.TargetType == "external_resource" {
 			externalCount++
+		} else if entry.TargetType == "repository_resource" {
+			resourceCount++
 		}
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE awesome_sources SET
 			status = CASE WHEN status = 'draft' THEN 'ready' ELSE status END,
 			default_branch = ?, readme_path = ?, last_successful_sha = ?,
-			github_repo_count = ?, external_entry_count = ?, last_synced_at = ?
+			github_repo_count = ?, external_entry_count = ?, resource_entry_count = ?, last_synced_at = ?
 		WHERE id = ?
-	`, nullable(defaultBranch), nullable(readmePath), readmeSHA, githubCount, externalCount, timeString(now), sourceID)
+	`, nullable(defaultBranch), nullable(readmePath), readmeSHA, githubCount, externalCount, resourceCount, timeString(now), sourceID)
 	if err != nil {
 		return err
 	}
@@ -296,10 +314,12 @@ func (s *SQLiteStore) ReplaceAwesomeSnapshot(
 	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE awesome_sync_runs SET
-			status = 'succeeded', readme_sha = ?, github_count = ?, external_count = ?,
-			invalid_count = ?, duplicate_count = ?, error_code = NULL, error_message = NULL, finished_at = ?
+			status = 'succeeded', readme_sha = ?, github_count = ?, external_count = ?, resource_count = ?,
+			extracted_count = ?, ignored_count = ?, invalid_count = ?, duplicate_count = ?,
+			error_code = NULL, error_message = NULL, finished_at = ?
 		WHERE id = ?
-	`, readmeSHA, githubCount, externalCount, run.InvalidCount, run.DuplicateCount, timeString(now), run.ID)
+	`, readmeSHA, githubCount, externalCount, resourceCount, run.ExtractedCount, run.IgnoredCount,
+		run.InvalidCount, run.DuplicateCount, timeString(now), run.ID)
 	if err != nil {
 		return err
 	}
@@ -324,19 +344,24 @@ func (s *SQLiteStore) UpsertAwesomeRepositories(ctx context.Context, repos []mod
 	return tx.Commit()
 }
 
-// ListPublishedAwesomeEntries returns only verified GitHub Repo rows from a published source.
+// ListPublishedAwesomeEntries returns every active catalog entry. GitHub rows carry verified
+// repository facts; resource rows intentionally leave repository-only facts empty rather than
+// inventing stars, forks or timestamps.
 func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID string) ([]model.AwesomeEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT e.source_id, e.target_type, e.target_key, e.gh_repo_id,
-		       r.owner, r.name, r.full_name, r.description, r.owner_avatar, r.homepage, r.language,
-		       r.stars, r.forks, r.watchers, r.subscribers, r.open_issues, r.default_branch,
-		       r.license_spdx, r.topics_json, r.is_archived, r.is_fork,
+		       COALESCE(r.owner, ''), COALESCE(r.name, ''), COALESCE(r.full_name, ''),
+		       r.description, r.owner_avatar, r.homepage, r.language,
+		       COALESCE(r.stars, 0), COALESCE(r.forks, 0), COALESCE(r.watchers, 0),
+		       COALESCE(r.subscribers, 0), COALESCE(r.open_issues, 0), r.default_branch,
+		       r.license_spdx, COALESCE(r.topics_json, '[]'),
+		       COALESCE(r.is_archived, 0), COALESCE(r.is_fork, 0),
 		       r.pushed_at, r.updated_at, r.created_at, e.entry_title, e.entry_description,
 		       e.section_path_json, e.raw_url, e.source_anchor_url, e.entry_order
 		FROM awesome_entries e
 		JOIN awesome_sources s ON s.id = e.source_id AND s.status = 'published'
-		JOIN repos r ON r.gh_repo_id = e.gh_repo_id
-		WHERE e.source_id = ? AND e.is_active = 1 AND e.target_type = 'github_repo'
+		LEFT JOIN repos r ON r.gh_repo_id = e.gh_repo_id
+		WHERE e.source_id = ? AND e.is_active = 1
 		ORDER BY e.entry_order ASC, e.target_key ASC
 	`, sourceID)
 	if err != nil {
@@ -346,7 +371,7 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 	entries := make([]model.AwesomeEntry, 0)
 	for rows.Next() {
 		var entry model.AwesomeEntry
-		var repoID int64
+		var repoID sql.NullInt64
 		var description, avatar, homepage, language, defaultBranch, licenseSpdx sql.NullString
 		var pushedAt, repoUpdatedAt, createdAt, entryDescription sql.NullString
 		var archived, fork int
@@ -359,7 +384,9 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 			&entry.RawURL, &entry.SourceAnchorURL, &entry.EntryOrder); err != nil {
 			return nil, err
 		}
-		entry.GhRepoID = &repoID
+		if repoID.Valid {
+			entry.GhRepoID = &repoID.Int64
+		}
 		entry.Description = description.String
 		entry.OwnerAvatar = avatar.String
 		entry.Homepage = homepage.String
@@ -391,24 +418,28 @@ func (s *SQLiteStore) ListPublishedAwesomeEntries(ctx context.Context, sourceID 
 func (s *SQLiteStore) AwesomeRepositoryFactsComplete(
 	ctx context.Context,
 	sourceID string,
-	expectedCount int,
+	expectedGitHubCount int,
+	expectedEntryCount int,
 ) (bool, error) {
-	var activeCount, linkedIDCount, repositoryCount int
+	var activeCount, githubCount, linkedIDCount, repositoryCount int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*), COUNT(e.gh_repo_id), COUNT(r.gh_repo_id)
+		SELECT COUNT(*),
+		       COALESCE(SUM(CASE WHEN e.target_type = 'github_repo' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN e.target_type = 'github_repo' AND e.gh_repo_id IS NOT NULL THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN e.target_type = 'github_repo' AND r.gh_repo_id IS NOT NULL THEN 1 ELSE 0 END), 0)
 		FROM awesome_entries e
 		LEFT JOIN repos r ON r.gh_repo_id = e.gh_repo_id
 		WHERE e.source_id = ?
 		  AND e.is_active = 1
-		  AND e.target_type = 'github_repo'
-	`, sourceID).Scan(&activeCount, &linkedIDCount, &repositoryCount)
+	`, sourceID).Scan(&activeCount, &githubCount, &linkedIDCount, &repositoryCount)
 	if err != nil {
 		return false, err
 	}
-	return expectedCount > 0 &&
-		activeCount == expectedCount &&
-		linkedIDCount == activeCount &&
-		repositoryCount == activeCount, nil
+	return expectedEntryCount > 0 &&
+		activeCount == expectedEntryCount &&
+		githubCount == expectedGitHubCount &&
+		linkedIDCount == expectedGitHubCount &&
+		repositoryCount == expectedGitHubCount, nil
 }
 
 func upsertAwesomeRepo(ctx context.Context, tx *sql.Tx, repo model.Repository, now time.Time) error {
@@ -473,7 +504,8 @@ func (s *SQLiteStore) ReplaceAwesomeSourceLanguages(ctx context.Context, sourceI
 const awesomeSourceSelect = `
 	SELECT awesome_sources.id, awesome_sources.repo_full_name, awesome_sources.display_name,
 	       awesome_sources.image_url, awesome_sources.summary_zh, awesome_sources.summary_en,
-	       awesome_sources.featured, awesome_sources.sort_order, awesome_sources.status,
+	       awesome_sources.featured, awesome_sources.sort_order, awesome_sources.parser_profile,
+	       awesome_sources.status,
 	       awesome_sources.revision, awesome_sources.default_branch, awesome_sources.readme_path,
 	       awesome_sources.last_successful_sha,
 	       COALESCE(repos.stars, 0) AS source_stars,
@@ -489,6 +521,7 @@ const awesomeSourceSelect = `
 	           WHERE source_id = awesome_sources.id
 	       ), '{}') AS language_bytes,
 	       awesome_sources.github_repo_count, awesome_sources.external_entry_count,
+	       awesome_sources.resource_entry_count,
 	       awesome_sources.last_synced_at, awesome_sources.created_at, awesome_sources.updated_at
 	FROM awesome_sources
 	LEFT JOIN repos ON repos.full_name = awesome_sources.repo_full_name COLLATE NOCASE`
@@ -505,11 +538,12 @@ func scanAwesomeSource(row rowScanner) (model.AwesomeSource, error) {
 	var featured int
 	var createdAt, updatedAt string
 	err := row.Scan(&source.ID, &source.RepoFullName, &source.DisplayName, &imageURL, &summaryZH, &summaryEN,
-		&featured, &source.SortOrder, &source.Status, &source.Revision, &defaultBranch, &readmePath,
+		&featured, &source.SortOrder, &source.ParserProfile, &source.Status, &source.Revision, &defaultBranch, &readmePath,
 		&sha, &source.SourceStars, &repoDescription,
 		&source.SourceForks, &source.SourceWatchers, &source.SourceSubscribers, &source.SourceOpenIssues,
 		&source.SourceLanguage, &languageBytesJSON,
-		&source.GitHubRepoCount, &source.ExternalEntryCount, &lastSyncedAt, &createdAt, &updatedAt)
+		&source.GitHubRepoCount, &source.ExternalEntryCount, &source.ResourceEntryCount,
+		&lastSyncedAt, &createdAt, &updatedAt)
 	if err != nil {
 		return model.AwesomeSource{}, err
 	}
@@ -536,7 +570,8 @@ func scanAwesomeSyncRun(row rowScanner) (model.AwesomeSyncRun, error) {
 	var readmeSHA, errorCode, errorMessage, finishedAt sql.NullString
 	var startedAt string
 	err := row.Scan(&run.ID, &run.SourceID, &run.Status, &run.Trigger, &readmeSHA,
-		&run.GitHubCount, &run.ExternalCount, &run.InvalidCount, &run.DuplicateCount,
+		&run.GitHubCount, &run.ExternalCount, &run.ResourceCount, &run.ExtractedCount,
+		&run.IgnoredCount, &run.InvalidCount, &run.DuplicateCount,
 		&errorCode, &errorMessage, &startedAt, &finishedAt)
 	if err != nil {
 		return model.AwesomeSyncRun{}, err

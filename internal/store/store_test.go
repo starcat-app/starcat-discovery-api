@@ -258,7 +258,7 @@ func TestSQLiteStorePruneReposNotInPreservesActiveAwesomeRepositories(t *testing
 		t.Fatalf("ReplaceAwesomeSnapshot() error = %v", err)
 	}
 
-	complete, err := store.AwesomeRepositoryFactsComplete(ctx, "awesome-protected", 1)
+	complete, err := store.AwesomeRepositoryFactsComplete(ctx, "awesome-protected", 1, 1)
 	if err != nil || !complete {
 		t.Fatalf("AwesomeRepositoryFactsComplete() = %v, %v", complete, err)
 	}
@@ -280,7 +280,7 @@ func TestSQLiteStorePruneReposNotInPreservesActiveAwesomeRepositories(t *testing
 	if _, err := store.db.ExecContext(ctx, `UPDATE awesome_entries SET gh_repo_id = NULL WHERE source_id = ?`, "awesome-protected"); err != nil {
 		t.Fatalf("corrupt Awesome relation error = %v", err)
 	}
-	complete, err = store.AwesomeRepositoryFactsComplete(ctx, "awesome-protected", 1)
+	complete, err = store.AwesomeRepositoryFactsComplete(ctx, "awesome-protected", 1, 1)
 	if err != nil || complete {
 		t.Fatalf("corrupt AwesomeRepositoryFactsComplete() = %v, %v", complete, err)
 	}

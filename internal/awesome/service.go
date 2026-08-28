@@ -35,7 +35,7 @@ type Store interface {
 	ReplaceAwesomeSourceLanguages(context.Context, string, map[string]int) error
 	ReplaceAwesomeSnapshot(context.Context, string, string, string, string, []model.Repository, []model.AwesomeEntry, model.AwesomeSyncRun) error
 	ListPublishedAwesomeEntries(context.Context, string) ([]model.AwesomeEntry, error)
-	AwesomeRepositoryFactsComplete(context.Context, string, int) (bool, error)
+	AwesomeRepositoryFactsComplete(context.Context, string, int, int) (bool, error)
 }
 
 // GitHubClient is deliberately limited to public repository and README facts.
@@ -82,6 +82,9 @@ func NewService(store Store, github GitHubClient, invalidators ...ResponseCacheI
 
 // CreateSource validates the public GitHub source before persisting a draft.
 func (s *Service) CreateSource(ctx context.Context, source model.AwesomeSource) (model.AwesomeSource, error) {
+	if source.ParserProfile == "" {
+		source.ParserProfile = model.AwesomeParserGeneric
+	}
 	if err := validateSourceFields(source, true); err != nil {
 		return model.AwesomeSource{}, err
 	}
@@ -107,6 +110,9 @@ func (s *Service) CreateSource(ctx context.Context, source model.AwesomeSource) 
 
 // UpdateSource applies optimistic concurrency and prevents a published ID from being rebound.
 func (s *Service) UpdateSource(ctx context.Context, source model.AwesomeSource, expectedRevision int) (model.AwesomeSource, error) {
+	if source.ParserProfile == "" {
+		source.ParserProfile = model.AwesomeParserGeneric
+	}
 	if expectedRevision <= 0 {
 		return model.AwesomeSource{}, invalidSource("revision must be positive")
 	}
@@ -246,7 +252,12 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 	if err != nil {
 		return run, mapGitHubError(err, "读取来源 README 失败")
 	}
-	factsComplete, err := s.store.AwesomeRepositoryFactsComplete(ctx, source.ID, source.GitHubRepoCount)
+	factsComplete, err := s.store.AwesomeRepositoryFactsComplete(
+		ctx,
+		source.ID,
+		source.GitHubRepoCount,
+		source.GitHubRepoCount+source.ExternalEntryCount+source.ResourceEntryCount,
+	)
 	if err != nil {
 		return run, err
 	}
@@ -255,6 +266,7 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 		run.ReadmeSHA = readme.SHA
 		run.GitHubCount = source.GitHubRepoCount
 		run.ExternalCount = source.ExternalEntryCount
+		run.ResourceCount = source.ResourceEntryCount
 		if err := s.store.FinishAwesomeSyncRun(ctx, run); err != nil {
 			return run, err
 		}
@@ -264,6 +276,7 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 	if err != nil {
 		return run, &ServiceError{Status: http.StatusUnprocessableEntity, Code: "AWESOME_README_UNSUPPORTED", Message: err.Error()}
 	}
+	parsed.Entries, parsed.IgnoredCount = entriesForProfile(source.ParserProfile, parsed.Entries, parsed.IgnoredCount)
 	repos := make([]model.Repository, 0)
 	entries := make([]model.AwesomeEntry, 0, len(parsed.Entries))
 	seenRepoIDs := make(map[int64]struct{})
@@ -298,9 +311,11 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 		entries = append(entries, entry)
 		repos = append(repos, repositoryModel(repo, s.now()))
 	}
-	if len(repos) == 0 {
-		return run, &ServiceError{Status: http.StatusUnprocessableEntity, Code: "AWESOME_README_UNSUPPORTED", Message: "README 没有可发布的 GitHub Repo"}
+	if len(entries) == 0 {
+		return run, &ServiceError{Status: http.StatusUnprocessableEntity, Code: "AWESOME_README_UNSUPPORTED", Message: "README 没有可发布的项目或资源"}
 	}
+	run.ExtractedCount = parsed.ExtractedCount
+	run.IgnoredCount = parsed.IgnoredCount
 	run.InvalidCount = parsed.InvalidCount
 	run.DuplicateCount = parsed.DuplicateCount
 	if err := s.store.ReplaceAwesomeSnapshot(ctx, source.ID, sourceRepo.DefaultBranch, readme.Path, readme.SHA, repos, entries, run); err != nil {
@@ -311,11 +326,42 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 	for _, entry := range entries {
 		if entry.TargetType == "github_repo" {
 			run.GitHubCount++
-		} else {
+		} else if entry.TargetType == "external_resource" {
 			run.ExternalCount++
+		} else if entry.TargetType == "repository_resource" {
+			run.ResourceCount++
 		}
 	}
 	return run, nil
+}
+
+// entriesForProfile 让内容管理配置决定“哪些链接是该来源的有效条目”。
+// generic 继续保持传统 Awesome 的 GitHub 仓库语义；另外两种 profile 才接纳
+// 外站资源或当前仓库内的深层文件，避免普通来源误把导航链接发布成项目。
+func entriesForProfile(
+	profile model.AwesomeParserProfile,
+	entries []model.AwesomeEntry,
+	ignoredCount int,
+) ([]model.AwesomeEntry, int) {
+	allowed := func(targetType string) bool {
+		switch profile {
+		case model.AwesomeParserExternalCatalog:
+			return targetType == "github_repo" || targetType == "external_resource"
+		case model.AwesomeParserRepositoryResources:
+			return targetType == "github_repo" || targetType == "repository_resource"
+		default:
+			return targetType == "github_repo"
+		}
+	}
+	filtered := make([]model.AwesomeEntry, 0, len(entries))
+	for _, entry := range entries {
+		if allowed(entry.TargetType) {
+			filtered = append(filtered, entry)
+		} else {
+			ignoredCount++
+		}
+	}
+	return filtered, ignoredCount
 }
 
 func (s *Service) PublishSource(ctx context.Context, sourceID string) (model.AwesomeSource, error) {
@@ -323,7 +369,8 @@ func (s *Service) PublishSource(ctx context.Context, sourceID string) (model.Awe
 	if err != nil {
 		return model.AwesomeSource{}, mapStoreError(err)
 	}
-	if source.LastSuccessfulSHA == "" || source.GitHubRepoCount == 0 ||
+	if source.LastSuccessfulSHA == "" ||
+		source.GitHubRepoCount+source.ExternalEntryCount+source.ResourceEntryCount == 0 ||
 		(source.Status != model.AwesomeSourceReady && source.Status != model.AwesomeSourceArchived && source.Status != model.AwesomeSourcePublished) {
 		return model.AwesomeSource{}, conflict("AWESOME_SOURCE_NOT_READY", "来源尚未通过成功同步")
 	}
@@ -382,6 +429,11 @@ func validateSourceFields(source model.AwesomeSource, requireID bool) error {
 	}
 	if source.ID == "" || strings.TrimSpace(source.DisplayName) == "" || strings.TrimSpace(source.RepoFullName) == "" {
 		return invalidSource("id, repo_full_name and display_name are required")
+	}
+	switch source.ParserProfile {
+	case model.AwesomeParserGeneric, model.AwesomeParserExternalCatalog, model.AwesomeParserRepositoryResources:
+	default:
+		return invalidSource("parser_profile is invalid")
 	}
 	if source.ImageURL != "" {
 		parsed, err := url.Parse(source.ImageURL)

@@ -25,6 +25,18 @@ type NormalizedTarget struct {
 
 // NormalizeTarget classifies an HTTP(S) README link without guessing an external product's repo.
 func NormalizeTarget(raw string) (NormalizedTarget, error) {
+	return normalizeTarget(raw, "", false)
+}
+
+// NormalizeTargetForSource classifies one README link while retaining links to files
+// inside the Awesome source repository as first-class resource entries. Deep links into
+// other GitHub repositories still resolve to their repository root because the repository
+// is the product users expect to browse in Starcat.
+func NormalizeTargetForSource(raw, sourceRepo string) (NormalizedTarget, error) {
+	return normalizeTarget(raw, sourceRepo, true)
+}
+
+func normalizeTarget(raw, sourceRepo string, allowRepositoryResources bool) (NormalizedTarget, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" {
 		return NormalizedTarget{}, fmt.Errorf("invalid absolute URL")
@@ -38,8 +50,8 @@ func NormalizeTarget(raw string) (NormalizedTarget, error) {
 
 	if parsed.Host == "github.com" || parsed.Host == "www.github.com" {
 		parts := splitPath(parsed.Path)
-		if len(parts) != 2 {
-			return NormalizedTarget{}, fmt.Errorf("GitHub URL is not a repository root")
+		if len(parts) < 2 || (!allowRepositoryResources && len(parts) != 2) {
+			return NormalizedTarget{}, fmt.Errorf("GitHub URL is not a repository")
 		}
 		owner := parts[0]
 		repo := strings.TrimSuffix(parts[1], ".git")
@@ -51,11 +63,27 @@ func NormalizeTarget(raw string) (NormalizedTarget, error) {
 		}
 		fullName := owner + "/" + repo
 		canonical := "https://github.com/" + fullName
+		if len(parts) > 2 {
+			// Only blob/tree links identify repository-owned content. Issue, release and
+			// account routes are navigation and must not be counted as catalog entries.
+			if parts[2] != "blob" && parts[2] != "tree" {
+				return NormalizedTarget{}, fmt.Errorf("GitHub URL is not repository content")
+			}
+		}
+		if len(parts) > 2 && strings.EqualFold(fullName, sourceRepo) {
+			parsed.RawQuery = ""
+			parsed.Path = "/" + strings.Join(parts, "/")
+			resourceURL := parsed.String()
+			return NormalizedTarget{
+				Type: "repository_resource", Key: "repository_resource:" + resourceURL,
+				RepoFullName: fullName, URL: resourceURL,
+			}, nil
+		}
 		return NormalizedTarget{Type: "github_repo", Key: "github_name:" + strings.ToLower(fullName), RepoFullName: fullName, URL: canonical}, nil
 	}
 
 	parsed.Path = cleanExternalPath(parsed.Path)
-	return NormalizedTarget{Type: "external", Key: "external:" + parsed.String(), URL: parsed.String()}, nil
+	return NormalizedTarget{Type: "external_resource", Key: "external_resource:" + parsed.String(), URL: parsed.String()}, nil
 }
 
 // NormalizeSourceInput accepts the two explicit custom-source input forms from the product contract.

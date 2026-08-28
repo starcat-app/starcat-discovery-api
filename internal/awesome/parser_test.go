@@ -44,7 +44,7 @@ Nested
 	if result.Entries[0].EntryDescription != "Fast transfer tool." {
 		t.Fatalf("description = %q", result.Entries[0].EntryDescription)
 	}
-	if result.Entries[1].TargetType != "external" {
+	if result.Entries[1].TargetType != "external_resource" {
 		t.Fatalf("external target = %+v", result.Entries[1])
 	}
 	if got := result.Entries[2].SectionPath; len(got) != 2 || got[1] != "Nested" {
@@ -82,5 +82,65 @@ func TestNormalizeSourceInputSupportsExplicitForms(t *testing.T) {
 		if err != nil || got != want {
 			t.Fatalf("NormalizeSourceInput(%q) = %q, %v; want %q", input, got, err, want)
 		}
+	}
+}
+
+func TestParseREADMEHandlesBlockquotesTablesAndRepositoryResources(t *testing.T) {
+	// 这些片段分别保留 awesome-java、awesome-design-md 与 awesome-cursorrules
+	// 的真实结构特征，防止解析器再次只兼容 Markdown list。
+	readme := []byte(`# Catalog
+
+<details>
+<summary>Libraries</summary>
+
+> **[ArchUnit](https://github.com/TNG/ArchUnit)** - Test architecture rules.
+
+</details>
+
+| Project | Description |
+| --- | --- |
+| [DesignMD](https://getdesign.md/example/design-md) | Design resource |
+
+- [Cursor rule](https://github.com/PatrickJS/awesome-cursorrules/blob/main/rules/react.mdc) - React rule.
+`)
+	result, err := ParseREADME(
+		readme,
+		"PatrickJS/awesome-cursorrules",
+		"https://github.com/PatrickJS/awesome-cursorrules/blob/main/README.md",
+		"sha-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(result.Entries); got != 3 {
+		t.Fatalf("entries = %d, want 3: %#v", got, result.Entries)
+	}
+	if got := result.Entries[0].TargetType; got != "github_repo" {
+		t.Fatalf("blockquote target = %q", got)
+	}
+	if got := result.Entries[0].EntryDescription; got != "Test architecture rules." {
+		t.Fatalf("blockquote description = %q", got)
+	}
+	if got := result.Entries[1].TargetType; got != "external_resource" {
+		t.Fatalf("table target = %q", got)
+	}
+	if got := result.Entries[2].TargetType; got != "repository_resource" {
+		t.Fatalf("repository resource target = %q", got)
+	}
+	if result.ExtractedCount != 3 || result.InvalidCount != 0 {
+		t.Fatalf("diagnostics = %#v", result)
+	}
+}
+
+func TestNormalizeTargetMapsOtherRepositoryDeepLinksToRepositoryRoot(t *testing.T) {
+	target, err := NormalizeTargetForSource(
+		"https://github.com/TNG/ArchUnit/blob/main/README.md#usage",
+		"akullpp/awesome-java",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Type != "github_repo" || target.RepoFullName != "TNG/ArchUnit" || target.URL != "https://github.com/TNG/ArchUnit" {
+		t.Fatalf("unexpected target: %#v", target)
 	}
 }

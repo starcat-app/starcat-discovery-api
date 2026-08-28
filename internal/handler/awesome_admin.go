@@ -105,15 +105,16 @@ func (h *AwesomeAdminHandler) HandleSyncRuns(w http.ResponseWriter, r *http.Requ
 }
 
 type awesomeSourceWriteRequest struct {
-	ID           string `json:"id"`
-	RepoFullName string `json:"repo_full_name"`
-	DisplayName  string `json:"display_name"`
-	ImageURL     string `json:"image_url"`
-	SummaryZH    string `json:"summary_zh"`
-	SummaryEN    string `json:"summary_en"`
-	Featured     bool   `json:"featured"`
-	SortOrder    int    `json:"sort_order"`
-	Revision     int    `json:"revision"`
+	ID            string                     `json:"id"`
+	RepoFullName  string                     `json:"repo_full_name"`
+	DisplayName   string                     `json:"display_name"`
+	ImageURL      string                     `json:"image_url"`
+	SummaryZH     string                     `json:"summary_zh"`
+	SummaryEN     string                     `json:"summary_en"`
+	Featured      bool                       `json:"featured"`
+	SortOrder     int                        `json:"sort_order"`
+	ParserProfile model.AwesomeParserProfile `json:"parser_profile"`
+	Revision      int                        `json:"revision"`
 }
 
 func (r awesomeSourceWriteRequest) source(id string) model.AwesomeSource {
@@ -123,6 +124,7 @@ func (r awesomeSourceWriteRequest) source(id string) model.AwesomeSource {
 	return model.AwesomeSource{
 		ID: id, RepoFullName: r.RepoFullName, DisplayName: r.DisplayName, ImageURL: r.ImageURL,
 		SummaryZH: r.SummaryZH, SummaryEN: r.SummaryEN, Featured: r.Featured, SortOrder: r.SortOrder,
+		ParserProfile: r.ParserProfile,
 	}
 }
 

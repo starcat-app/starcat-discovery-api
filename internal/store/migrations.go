@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
+	"strings"
 )
 
 // createSchema 初始化 discovery catalog；CREATE TABLE 负责新库，后续 ensure 方法负责
@@ -189,6 +191,8 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			summary_en            TEXT,
 			featured              INTEGER NOT NULL DEFAULT 0,
 			sort_order            INTEGER NOT NULL DEFAULT 0,
+			parser_profile        TEXT NOT NULL DEFAULT 'generic'
+				CHECK (parser_profile IN ('generic', 'external_catalog', 'repository_resources')),
 			status                TEXT NOT NULL DEFAULT 'draft'
 				CHECK (status IN ('draft', 'ready', 'published', 'archived')),
 			revision              INTEGER NOT NULL DEFAULT 1,
@@ -198,6 +202,7 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			repo_metadata_version INTEGER NOT NULL DEFAULT 1,
 			github_repo_count     INTEGER NOT NULL DEFAULT 0,
 			external_entry_count  INTEGER NOT NULL DEFAULT 0,
+			resource_entry_count  INTEGER NOT NULL DEFAULT 0,
 			last_synced_at        TEXT,
 			created_at            TEXT NOT NULL,
 			updated_at            TEXT NOT NULL
@@ -215,7 +220,7 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 
 		CREATE TABLE IF NOT EXISTS awesome_entries (
 			source_id            TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
-			target_type          TEXT NOT NULL CHECK (target_type IN ('github_repo', 'external')),
+			target_type          TEXT NOT NULL CHECK (target_type IN ('github_repo', 'external_resource', 'repository_resource')),
 			target_key           TEXT NOT NULL,
 			gh_repo_id           INTEGER REFERENCES repos(gh_repo_id) ON DELETE SET NULL,
 			entry_title          TEXT NOT NULL,
@@ -245,6 +250,9 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			readme_sha           TEXT,
 			github_count         INTEGER NOT NULL DEFAULT 0,
 			external_count       INTEGER NOT NULL DEFAULT 0,
+			resource_count       INTEGER NOT NULL DEFAULT 0,
+			extracted_count      INTEGER NOT NULL DEFAULT 0,
+			ignored_count        INTEGER NOT NULL DEFAULT 0,
 			invalid_count        INTEGER NOT NULL DEFAULT 0,
 			duplicate_count      INTEGER NOT NULL DEFAULT 0,
 			error_code           TEXT,
@@ -261,7 +269,10 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	return ensureAwesomeRepositoryMetadataVersion(ctx, db)
+	if err := ensureAwesomeRepositoryMetadataVersion(ctx, db); err != nil {
+		return err
+	}
+	return ensureAwesomeParserSchema(ctx, db)
 }
 
 const awesomeRepositoryMetadataVersion = 1
@@ -307,4 +318,106 @@ func ensureAwesomeRepositoryMetadataVersion(ctx context.Context, db *sql.DB) err
 		WHERE repo_metadata_version < ?
 	`, awesomeRepositoryMetadataVersion, awesomeRepositoryMetadataVersion)
 	return err
+}
+
+// ensureAwesomeParserSchema upgrades the already-deployed Awesome cache without deleting
+// source metadata or snapshots. SQLite cannot alter a CHECK constraint in place, so the
+// entries table is rebuilt once while preserving every existing row.
+func ensureAwesomeParserSchema(ctx context.Context, db *sql.DB) error {
+	for _, column := range []struct {
+		table      string
+		name       string
+		definition string
+	}{
+		{"awesome_sources", "parser_profile", "TEXT NOT NULL DEFAULT 'generic'"},
+		{"awesome_sources", "resource_entry_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"awesome_sync_runs", "resource_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"awesome_sync_runs", "extracted_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"awesome_sync_runs", "ignored_count", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		exists, err := sqliteColumnExists(ctx, db, column.table, column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.ExecContext(ctx, fmt.Sprintf(
+				"ALTER TABLE %s ADD COLUMN %s %s", column.table, column.name, column.definition,
+			)); err != nil {
+				return err
+			}
+		}
+	}
+
+	var entriesSQL string
+	if err := db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'awesome_entries'`).Scan(&entriesSQL); err != nil {
+		return err
+	}
+	if strings.Contains(entriesSQL, "external_resource") {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer db.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE awesome_entries_v2 (
+			source_id TEXT NOT NULL REFERENCES awesome_sources(id) ON DELETE CASCADE,
+			target_type TEXT NOT NULL CHECK (target_type IN ('github_repo', 'external_resource', 'repository_resource')),
+			target_key TEXT NOT NULL,
+			gh_repo_id INTEGER REFERENCES repos(gh_repo_id) ON DELETE SET NULL,
+			entry_title TEXT NOT NULL,
+			entry_description TEXT,
+			section_path_json TEXT NOT NULL DEFAULT '[]',
+			raw_url TEXT NOT NULL,
+			source_anchor_url TEXT NOT NULL,
+			entry_order INTEGER NOT NULL,
+			is_active INTEGER NOT NULL DEFAULT 1,
+			first_seen_sha TEXT NOT NULL,
+			last_seen_sha TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (source_id, target_key)
+		);
+		INSERT INTO awesome_entries_v2
+		SELECT source_id,
+		       CASE WHEN target_type = 'external' THEN 'external_resource' ELSE target_type END,
+		       target_key, gh_repo_id, entry_title, entry_description, section_path_json,
+		       raw_url, source_anchor_url, entry_order, is_active, first_seen_sha, last_seen_sha,
+		       created_at, updated_at
+		FROM awesome_entries;
+		DROP TABLE awesome_entries;
+		ALTER TABLE awesome_entries_v2 RENAME TO awesome_entries;
+		CREATE INDEX idx_awesome_entries_source_order
+			ON awesome_entries(source_id, is_active, entry_order, target_key);
+		CREATE INDEX idx_awesome_entries_repo
+			ON awesome_entries(gh_repo_id, source_id) WHERE gh_repo_id IS NOT NULL;
+	`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
