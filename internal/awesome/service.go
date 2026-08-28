@@ -281,6 +281,23 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 		return run, &ServiceError{Status: http.StatusUnprocessableEntity, Code: "AWESOME_README_UNSUPPORTED", Message: err.Error()}
 	}
 	parsed.Entries, parsed.IgnoredCount = entriesForProfile(source.ParserProfile, parsed.Entries, parsed.IgnoredCount)
+	if len(parsed.Entries) == 0 {
+		// README 能正常解析、但所有候选都因“仅独立 GitHub 仓库”规则被排除时，
+		// 这是一次有效的空快照，不是解析故障。必须原子替换旧数据，才能清掉历史版本
+		// 已发布的外部网页或仓库文件；真正的空 README 仍由 ParseREADME 返回错误保护旧快照。
+		run.ExtractedCount = parsed.ExtractedCount
+		run.IgnoredCount = parsed.IgnoredCount
+		run.InvalidCount = parsed.InvalidCount
+		run.DuplicateCount = parsed.DuplicateCount
+		if err := s.store.ReplaceAwesomeSnapshot(
+			ctx, source.ID, sourceRepo.DefaultBranch, readme.Path, readme.SHA, nil, nil, run,
+		); err != nil {
+			return run, err
+		}
+		run.Status = "succeeded"
+		run.ReadmeSHA = readme.SHA
+		return run, nil
+	}
 	repos := make([]model.Repository, 0)
 	entries := make([]model.AwesomeEntry, 0, len(parsed.Entries))
 	seenRepoIDs := make(map[int64]struct{})

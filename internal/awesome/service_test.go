@@ -234,7 +234,7 @@ func TestServicePublishRequiresSuccessfulNonEmptySync(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsCatalogWithoutIndependentGitHubRepositories(t *testing.T) {
+func TestServiceClearsCatalogWithoutIndependentGitHubRepositories(t *testing.T) {
 	ctx := context.Background()
 	sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "awesome.db"))
 	if err != nil {
@@ -257,8 +257,12 @@ func TestServiceRejectsCatalogWithoutIndependentGitHubRepositories(t *testing.T)
 		t.Fatal(err)
 	}
 	run, err := service.SyncSource(ctx, created.ID, "manual")
-	if err == nil || run.Status != "failed" || run.ExternalCount != 0 || run.GitHubCount != 0 {
+	if err != nil || run.Status != "succeeded" || run.ExternalCount != 0 || run.GitHubCount != 0 {
 		t.Fatalf("SyncSource() = %+v, %v", run, err)
+	}
+	updated, err := sqliteStore.GetAwesomeSource(ctx, created.ID)
+	if err != nil || updated.GitHubRepoCount != 0 || updated.ExternalEntryCount != 0 || updated.ResourceEntryCount != 0 {
+		t.Fatalf("updated source = %+v, %v", updated, err)
 	}
 	if _, err := service.PublishSource(ctx, created.ID); err == nil {
 		t.Fatal("resource-only source must not become public")
