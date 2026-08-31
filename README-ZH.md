@@ -5,7 +5,7 @@
 <a href="https://starcat.ink"><img src="https://raw.githubusercontent.com/starcat-app/starcat-pro/main/banner.webp" width="100%" alt="Starcat" /></a>
 
 <p><strong>这是 Starcat 探索、热门、新发布仓库 feed 的可自部署支撑服务。</strong></p>
-<p>Starcat 是一款原生 macOS 应用，可以把 GitHub Stars 变成可搜索、可整理、可用 AI 追问的本地知识库。当前 1.4.0 支持 README 渲染、知识库 RAG、GitHub 通知、我的项目、全局与仓库洞察、macOS 桌面小组件、标签与私有笔记、Release 追踪、仓库健康度、AI 摘要、语义搜索、浏览器插件，以及 Alfred / uTools / Raycast 外部搜索，并提供多个可自部署 API。</p>
+<p>Starcat 是一款原生 macOS 应用，可以把 GitHub Stars 变成可搜索、可整理、可用 AI 追问的本地知识库，并通过桌面客户端、插件、CLI 与可自部署服务组成完整生态。</p>
 
 <a href="https://github.com/starcat-app/homebrew-starcat"><img src="https://img.shields.io/badge/Install%20with-Homebrew-FBBF24?style=for-the-badge&logo=homebrew&logoColor=white" width="220" alt="Install with Homebrew"/></a>
 <br/>
@@ -35,7 +35,6 @@ brew install --cask starcat
 
 - 官网与下载: https://starcat.ink
 - Mac App Store: 搜索 Starcat for GitHub
-- 当前 Direct 版本: https://starcat.ink/downloads/Starcat-1.4.0-arm64.dmg
 - 公开支持与发布说明: https://github.com/starcat-app/starcat-pro
 - Starcat App Homebrew tap: https://github.com/starcat-app/homebrew-starcat
 - CLI / MCP: [starcat-cli](https://github.com/starcat-app/starcat-cli) / [Homebrew tap](https://github.com/starcat-app/homebrew-starcat-cli)
