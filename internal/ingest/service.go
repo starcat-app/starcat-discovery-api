@@ -39,6 +39,7 @@ type Store interface {
 	ReplaceTopicRanking(ctx context.Context, topic, platform string, entries []model.RankingEntry) error
 	TopRankingEntries(ctx context.Context, scoreColumn string, filters store.QueryFilters, limit int) ([]model.RankingEntry, error)
 	ListLanguages(ctx context.Context) ([]model.LanguageStat, error)
+	ReplaceDiscoveryCatalogMembership(ctx context.Context, repoIDs []int64) error
 	PruneReposNotIn(ctx context.Context, keepIDs []int64) (int, error)
 	StartSyncRun(ctx context.Context, mode string) (int64, time.Time, error)
 	FinishSyncRun(ctx context.Context, runID int64, status string, reposSeen, reposUpserted int, errorMessage string) (time.Time, error)
@@ -104,10 +105,15 @@ func (s *Service) Sync(ctx context.Context, mode string) (model.SyncResult, erro
 	if err != nil {
 		return finish("failed", err)
 	}
+	if len(candidateIDs) == 0 {
+		return finish("failed", fmt.Errorf("sync produced no candidates; keep previous discovery catalog"))
+	}
+	// repos 同时承载 Awesome 仓库事实；先原子替换 Discovery 归属，再据此生成排名，
+	// 避免 Awesome-only 行进入 bulk、Sidebar 计数和各类榜单。
+	if err := s.store.ReplaceDiscoveryCatalogMembership(ctx, candidateIDs); err != nil {
+		return finish("failed", err)
+	}
 	if isFullSyncMode(mode) {
-		if len(candidateIDs) == 0 {
-			return finish("failed", fmt.Errorf("full sync produced no candidates; skip prune"))
-		}
 		pruned, err := s.store.PruneReposNotIn(ctx, candidateIDs)
 		if err != nil {
 			return finish("failed", err)

@@ -209,6 +209,57 @@ func (s *SQLiteStore) RecordDailySnapshot(ctx context.Context, snapshot model.Da
 	return err
 }
 
+// ReplaceDiscoveryCatalogMembership 原子替换当前 Discovery 候选集合。
+//
+// repos 是 Discovery 与 Awesome 共用的仓库事实表，只有这里的显式成员才能进入
+// Discovery bulk、筛选、计数和排名。候选详情短暂拉取失败时，已存在的仓库事实仍可
+// 保留成员身份；尚未成功入库的新候选会被忽略，避免产生悬空外键。
+func (s *SQLiteStore) ReplaceDiscoveryCatalogMembership(ctx context.Context, repoIDs []int64) error {
+	seen := make(map[int64]bool, len(repoIDs))
+	placeholders := make([]string, 0, len(repoIDs))
+	ids := make([]interface{}, 0, len(repoIDs))
+	for _, repoID := range repoIDs {
+		if repoID <= 0 || seen[repoID] {
+			continue
+		}
+		seen[repoID] = true
+		placeholders = append(placeholders, "?")
+		ids = append(ids, repoID)
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("discovery catalog repo ids must contain positive ids")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM discovery_catalog_repos`); err != nil {
+		return err
+	}
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, timeString(time.Now().UTC()))
+	args = append(args, ids...)
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO discovery_catalog_repos (gh_repo_id, synced_at)
+		SELECT r.gh_repo_id, ?
+		FROM repos r
+		WHERE r.gh_repo_id IN (`+strings.Join(placeholders, ",")+`)
+	`, args...)
+	if err != nil {
+		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		return fmt.Errorf("discovery catalog candidates have no stored repository facts")
+	}
+	return tx.Commit()
+}
+
 // PruneReposNotIn 删除本轮全量同步不再命中的仓库。
 //
 // 只给 full sync 使用。空 keep list 直接拒绝，避免 GitHub 短暂异常或种子配置错误把
@@ -232,7 +283,18 @@ func (s *SQLiteStore) PruneReposNotIn(ctx context.Context, keepIDs []int64) (int
 	// Discovery 全量同步只拥有普通目录候选集，不能顺手删除 Awesome 快照仍在引用的
 	// 仓库事实。awesome_entries 对 repos 使用 ON DELETE SET NULL；若这里误删，来源计数
 	// 仍保留但公开查询的 INNER JOIN 会静默丢行，最终出现“目录 130、列表 2”的断裂。
-	result, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM discovery_catalog_repos
+		WHERE gh_repo_id NOT IN (`+strings.Join(placeholders, ",")+`)
+	`, args...); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `
 		DELETE FROM repos
 		WHERE gh_repo_id NOT IN (`+strings.Join(placeholders, ",")+`)
 		  AND NOT EXISTS (
@@ -248,6 +310,9 @@ func (s *SQLiteStore) PruneReposNotIn(ctx context.Context, keepIDs []int64) (int
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return int(rowsAffected), nil
@@ -343,10 +408,10 @@ func (s *SQLiteStore) TopRankingEntries(ctx context.Context, scoreColumn string,
 		limit = 100
 	}
 	where, args := buildFilterWhere(filters)
-	query := "SELECT r.gh_repo_id, r." + scoreColumn + " FROM repos r" + where +
+	query := "SELECT r.gh_repo_id, r." + scoreColumn + " FROM repos r JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id" + where +
 		" ORDER BY r." + scoreColumn + " DESC, r.stars DESC, r.gh_repo_id DESC LIMIT ?"
 	if filters.Category == "new-releases" && scoreColumn == "release_score" {
-		query = "SELECT r.gh_repo_id, r." + scoreColumn + " FROM repos r" + where +
+		query = "SELECT r.gh_repo_id, r." + scoreColumn + " FROM repos r JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id" + where +
 			" ORDER BY COALESCE(r.latest_release_at, '') DESC, r.release_score DESC, r.stars DESC, r.gh_repo_id DESC LIMIT ?"
 	}
 	args = append(args, limit)
@@ -409,6 +474,7 @@ func (s *SQLiteStore) ListCategoryRanking(ctx context.Context, category, bucket 
 		SELECT COUNT(*)
 		FROM category_rankings cr
 		JOIN repos r ON r.gh_repo_id = cr.gh_repo_id
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id
 		WHERE cr.category = ? AND cr.bucket = ?
 	`, category, bucket)
 	if err != nil {
@@ -418,6 +484,7 @@ func (s *SQLiteStore) ListCategoryRanking(ctx context.Context, category, bucket 
 		SELECT r.*, cr.rank, cr.score
 		FROM category_rankings cr
 		JOIN repos r ON r.gh_repo_id = cr.gh_repo_id
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id
 		WHERE cr.category = ? AND cr.bucket = ?
 		ORDER BY cr.rank ASC
 		LIMIT ? OFFSET ?
@@ -440,13 +507,13 @@ func (s *SQLiteStore) ListScoredRepos(ctx context.Context, scoreColumn string, f
 	}
 	page, limit = normalizePage(page, limit)
 	where, args := buildFilterWhere(filters)
-	countQuery := "SELECT COUNT(*) FROM repos r" + where
+	countQuery := "SELECT COUNT(*) FROM repos r JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id" + where
 	total, err := s.count(ctx, countQuery, args...)
 	if err != nil {
 		return model.Page[model.DiscoveryItem]{}, err
 	}
 
-	query := "SELECT r.*, 0 AS rank, r." + scoreColumn + " AS score FROM repos r" + where +
+	query := "SELECT r.*, 0 AS rank, r." + scoreColumn + " AS score FROM repos r JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id" + where +
 		" ORDER BY r." + scoreColumn + " DESC, r.stars DESC, r.gh_repo_id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, (page-1)*limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -472,12 +539,12 @@ func (s *SQLiteStore) ListSortedRepos(ctx context.Context, sortKey string, filte
 	}
 	page, limit = normalizePage(page, limit)
 	where, args := buildFilterWhere(filters)
-	total, err := s.count(ctx, "SELECT COUNT(*) FROM repos r"+where, args...)
+	total, err := s.count(ctx, "SELECT COUNT(*) FROM repos r JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id"+where, args...)
 	if err != nil {
 		return model.Page[model.DiscoveryItem]{}, err
 	}
 
-	query := "SELECT r.*, 0 AS rank, 0 AS score FROM repos r" + where +
+	query := "SELECT r.*, 0 AS rank, 0 AS score FROM repos r JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id" + where +
 		" ORDER BY " + orderClause + " LIMIT ? OFFSET ?"
 	args = append(args, limit, (page-1)*limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -500,6 +567,7 @@ func (s *SQLiteStore) ListAllRepos(ctx context.Context) ([]model.DiscoveryItem, 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.*, 0 AS rank, r.discovery_score AS score
 		FROM repos r
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id
 		ORDER BY r.discovery_score DESC, r.stars DESC, r.gh_repo_id DESC
 	`)
 	if err != nil {
@@ -516,8 +584,9 @@ func (s *SQLiteStore) ListAllRepos(ctx context.Context) ([]model.DiscoveryItem, 
 // ListLanguages 聚合 discovery catalog 中可用语言。
 func (s *SQLiteStore) ListLanguages(ctx context.Context) ([]model.LanguageStat, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT COALESCE(NULLIF(language, ''), ?) AS key, COUNT(*) AS count
-		FROM repos
+		SELECT COALESCE(NULLIF(r.language, ''), ?) AS key, COUNT(*) AS count
+		FROM repos r
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id
 		GROUP BY key
 		ORDER BY CASE WHEN key = ? THEN 1 ELSE 0 END, count DESC, key ASC
 	`, model.UncategorizedLanguageKey, model.UncategorizedLanguageKey)
@@ -543,7 +612,7 @@ func (s *SQLiteStore) ListLanguages(ctx context.Context) ([]model.LanguageStat, 
 
 // DiscoverySummary 汇总探索 Sidebar 所需的模式总量与筛选项计数。
 func (s *SQLiteStore) DiscoverySummary(ctx context.Context) (model.DiscoverySummary, error) {
-	totalRepos, err := s.count(ctx, `SELECT COUNT(*) FROM repos`)
+	totalRepos, err := s.count(ctx, `SELECT COUNT(*) FROM discovery_catalog_repos`)
 	if err != nil {
 		return model.DiscoverySummary{}, err
 	}
@@ -606,16 +675,18 @@ type QueryFilters struct {
 func (s *SQLiteStore) categoryTotal(ctx context.Context, category string) (int, error) {
 	return s.count(ctx, `
 		SELECT COUNT(*)
-		FROM category_rankings
-		WHERE category = ? AND bucket = ?
+		FROM category_rankings cr
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = cr.gh_repo_id
+		WHERE cr.category = ? AND cr.bucket = ?
 	`, category, model.AllBucket)
 }
 
 func (s *SQLiteStore) categoryLanguageFacetCounts(ctx context.Context, category string) ([]model.FacetCount, error) {
 	total, err := s.count(ctx, `
 		SELECT COUNT(*)
-		FROM category_rankings
-		WHERE category = ? AND bucket = ?
+		FROM category_rankings cr
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = cr.gh_repo_id
+		WHERE cr.category = ? AND cr.bucket = ?
 	`, category, model.AllBucket)
 	if err != nil {
 		return nil, err
@@ -628,6 +699,7 @@ func (s *SQLiteStore) categoryLanguageFacetCounts(ctx context.Context, category 
 		SELECT COALESCE(NULLIF(r.language, ''), ?) AS key, COUNT(*) AS count
 		FROM category_rankings cr
 		JOIN repos r ON r.gh_repo_id = cr.gh_repo_id
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = r.gh_repo_id
 		WHERE cr.category = ? AND cr.bucket = ?
 		GROUP BY key
 		ORDER BY CASE WHEN key = ? THEN 1 ELSE 0 END, count DESC, key ASC
@@ -691,9 +763,10 @@ func (s *SQLiteStore) codeCounts(ctx context.Context, table string) (map[string]
 		return nil, fmt.Errorf("unsupported code table %s", table)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT code, COUNT(*) AS count
-		FROM `+table+`
-		GROUP BY code
+		SELECT rc.code, COUNT(*) AS count
+		FROM `+table+` rc
+		JOIN discovery_catalog_repos dcr ON dcr.gh_repo_id = rc.gh_repo_id
+		GROUP BY rc.code
 	`)
 	if err != nil {
 		return nil, err

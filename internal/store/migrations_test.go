@@ -5,9 +5,72 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/starcat-app/starcat-discovery-api/internal/model"
 	_ "modernc.org/sqlite"
 )
+
+func TestDiscoveryCatalogMembershipUpgradeBackfillsOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-discovery.db")
+	store, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("create baseline database: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := store.UpsertRepo(ctx, model.Repository{
+		GhRepoID: 1, Owner: "discovery", Name: "candidate", FullName: "discovery/candidate",
+		DiscoveryScore: 0.8, IndexedAt: now,
+	}); err != nil {
+		t.Fatalf("seed Discovery repository: %v", err)
+	}
+	if err := store.UpsertAwesomeRepositories(ctx, []model.Repository{{
+		GhRepoID: 2, Owner: "awesome", Name: "only", FullName: "awesome/only", IndexedAt: now,
+	}}); err != nil {
+		t.Fatalf("seed Awesome repository: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE discovery_catalog_repos`); err != nil {
+		t.Fatalf("remove post-upgrade membership table: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM store_migrations WHERE name = ?`, discoveryCatalogMembershipMigration); err != nil {
+		t.Fatalf("remove migration marker: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("upgrade legacy database: %v", err)
+	}
+	var repoID int64
+	if err := reopened.db.QueryRowContext(ctx, `SELECT gh_repo_id FROM discovery_catalog_repos`).Scan(&repoID); err != nil {
+		t.Fatalf("read backfilled membership: %v", err)
+	}
+	if repoID != 1 {
+		t.Fatalf("backfilled repo id = %d, want Discovery candidate 1", repoID)
+	}
+	if _, err := reopened.db.ExecContext(ctx, `DELETE FROM discovery_catalog_repos`); err != nil {
+		t.Fatalf("clear membership after migration: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("close upgraded database: %v", err)
+	}
+
+	reopened, err = NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen upgraded database: %v", err)
+	}
+	defer reopened.Close()
+	var count int
+	if err := reopened.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM discovery_catalog_repos`).Scan(&count); err != nil {
+		t.Fatalf("count memberships after restart: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("one-time backfill repeated after restart: count=%d", count)
+	}
+}
 
 func TestAwesomeRepositoryMetadataUpgradeInvalidatesLegacySHAOnce(t *testing.T) {
 	ctx := context.Background()

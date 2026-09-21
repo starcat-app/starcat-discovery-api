@@ -32,6 +32,7 @@ func TestDiscoveryHandlerMostPopular(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertRepo() error = %v", err)
 	}
+	replaceHandlerDiscoveryCatalog(t, sqliteStore, 10)
 	if err := sqliteStore.ReplaceCategoryRanking(context.Background(), "most-popular", "__all__", []model.RankingEntry{
 		{RepoID: 10, Rank: 1, Score: 0.8},
 	}); err != nil {
@@ -97,6 +98,7 @@ func TestDiscoveryHandlerMostPopularExplicitSortBypassesRanking(t *testing.T) {
 			t.Fatalf("UpsertRepo() error = %v", err)
 		}
 	}
+	replaceHandlerDiscoveryCatalog(t, sqliteStore, 11, 12, 13)
 	if err := sqliteStore.ReplaceCategoryRanking(context.Background(), "most-popular", "__all__", []model.RankingEntry{
 		{RepoID: 11, Rank: 1, Score: 0.9},
 		{RepoID: 12, Rank: 2, Score: 0.1},
@@ -163,6 +165,7 @@ func TestDiscoveryHandlerBulk(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertRepo() error = %v", err)
 	}
+	replaceHandlerDiscoveryCatalog(t, sqliteStore, 50)
 	if err := sqliteStore.ReplaceCategoryRanking(context.Background(), "most-popular", "__all__", []model.RankingEntry{
 		{RepoID: 50, Rank: 1, Score: 0.8},
 	}); err != nil {
@@ -215,6 +218,7 @@ func TestDiscoveryHandlerItemArrayFieldsAreAlwaysPresent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertRepo() error = %v", err)
 	}
+	replaceHandlerDiscoveryCatalog(t, sqliteStore, 20)
 
 	handler := NewDiscoveryHandler(sqliteStore)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/feed", nil)
@@ -253,6 +257,7 @@ func TestDiscoveryHandlerSummary(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertRepo() error = %v", err)
 	}
+	replaceHandlerDiscoveryCatalog(t, sqliteStore, 40)
 
 	handler := NewDiscoveryHandler(sqliteStore)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/summary", nil)
@@ -283,6 +288,13 @@ func newHandlerStore(t *testing.T) *store.SQLiteStore {
 	}
 	t.Cleanup(func() { _ = sqliteStore.Close() })
 	return sqliteStore
+}
+
+func replaceHandlerDiscoveryCatalog(t *testing.T, sqliteStore *store.SQLiteStore, repoIDs ...int64) {
+	t.Helper()
+	if err := sqliteStore.ReplaceDiscoveryCatalogMembership(context.Background(), repoIDs); err != nil {
+		t.Fatalf("ReplaceDiscoveryCatalogMembership() error = %v", err)
+	}
 }
 
 func findSummaryMode(t *testing.T, summary model.DiscoverySummary, mode string) model.ModeSummary {
