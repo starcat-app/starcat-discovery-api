@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 // createSchema 初始化 discovery catalog；CREATE TABLE 负责新库，后续 ensure 方法负责
@@ -59,6 +60,16 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_repos_updated ON repos(updated_at DESC, pushed_at DESC, created_at DESC, gh_repo_id DESC);
 		CREATE INDEX IF NOT EXISTS idx_repos_created ON repos(created_at DESC, gh_repo_id DESC);
 		CREATE INDEX IF NOT EXISTS idx_repos_full_name_lower ON repos(lower(full_name), gh_repo_id DESC);
+
+		CREATE TABLE IF NOT EXISTS discovery_catalog_repos (
+			gh_repo_id INTEGER PRIMARY KEY REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
+			synced_at  TEXT NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS store_migrations (
+			name       TEXT PRIMARY KEY,
+			applied_at TEXT NOT NULL
+		);
 
 		CREATE TABLE IF NOT EXISTS repo_releases (
 			gh_repo_id     INTEGER NOT NULL REFERENCES repos(gh_repo_id) ON DELETE CASCADE,
@@ -269,10 +280,53 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := ensureDiscoveryCatalogMembership(ctx, db); err != nil {
+		return err
+	}
 	if err := ensureAwesomeRepositoryMetadataVersion(ctx, db); err != nil {
 		return err
 	}
 	return ensureAwesomeParserSchema(ctx, db)
+}
+
+const discoveryCatalogMembershipMigration = "2026-09-21-discovery-catalog-membership"
+
+// ensureDiscoveryCatalogMembership 为已上线的共享 repos 表补一次显式目录归属。
+//
+// Awesome 仓库事实也存放在 repos，因此不能再把“存在于 repos”视为 Discovery 成员。
+// 历史 Discovery 同步都会计算正的 discovery_score，而 Awesome-only 行保持默认 0；
+// 这里仅用该信号做一次保守回填，后续每轮 Discovery 同步会原子替换真实成员集合。
+func ensureDiscoveryCatalogMembership(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var applied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM store_migrations WHERE name = ?
+	`, discoveryCatalogMembershipMigration).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return tx.Commit()
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO discovery_catalog_repos (gh_repo_id, synced_at)
+		SELECT gh_repo_id, indexed_at
+		FROM repos
+		WHERE discovery_score > 0
+	`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO store_migrations (name, applied_at) VALUES (?, ?)
+	`, discoveryCatalogMembershipMigration, timeString(time.Now().UTC())); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 const awesomeRepositoryMetadataVersion = 1

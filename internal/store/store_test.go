@@ -34,6 +34,7 @@ func TestSQLiteStoreUpsertAndListScoredRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertRepo() error = %v", err)
 	}
+	replaceDiscoveryCatalog(t, store, 1)
 
 	page, err := store.ListScoredRepos(context.Background(), "discovery_score", QueryFilters{
 		Topic:    "ai",
@@ -84,6 +85,7 @@ func TestSQLiteStoreCategoryRanking(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertRepo(small) error = %v", err)
 	}
+	replaceDiscoveryCatalog(t, store, 2, 22)
 	if err := store.ReplaceCategoryRanking(context.Background(), "most-popular", "language:C++", []model.RankingEntry{
 		{RepoID: 2, Rank: 1, Score: 0.99},
 	}); err != nil {
@@ -182,6 +184,7 @@ func TestSQLiteStorePruneReposNotInCascadesRelatedRows(t *testing.T) {
 			t.Fatalf("UpsertRepo() error = %v", err)
 		}
 	}
+	replaceDiscoveryCatalog(t, store, 70, 71)
 	if err := store.UpsertRelease(context.Background(), model.Release{
 		GhRepoID:    71,
 		TagName:     "v0.1.0",
@@ -240,6 +243,7 @@ func TestSQLiteStorePruneReposNotInPreservesActiveAwesomeRepositories(t *testing
 			t.Fatalf("UpsertRepo(%d) error = %v", repo.GhRepoID, err)
 		}
 	}
+	replaceDiscoveryCatalog(t, store, 70, 71, 72)
 	repoID := int64(71)
 	if err := store.ReplaceAwesomeSnapshot(
 		ctx,
@@ -262,6 +266,7 @@ func TestSQLiteStorePruneReposNotInPreservesActiveAwesomeRepositories(t *testing
 	if err != nil || !complete {
 		t.Fatalf("AwesomeRepositoryFactsComplete() = %v, %v", complete, err)
 	}
+	replaceDiscoveryCatalog(t, store, 70)
 	pruned, err := store.PruneReposNotIn(ctx, []int64{70})
 	if err != nil {
 		t.Fatalf("PruneReposNotIn() error = %v", err)
@@ -275,6 +280,13 @@ func TestSQLiteStorePruneReposNotInPreservesActiveAwesomeRepositories(t *testing
 	}
 	if count != 1 {
 		t.Fatal("active Awesome repository was pruned")
+	}
+	visible, err := store.ListAllRepos(ctx)
+	if err != nil {
+		t.Fatalf("ListAllRepos() error = %v", err)
+	}
+	if len(visible) != 1 || visible[0].RepoID != 70 {
+		t.Fatalf("Awesome-only repository leaked into Discovery: %+v", visible)
 	}
 
 	if _, err := store.db.ExecContext(ctx, `UPDATE awesome_entries SET gh_repo_id = NULL WHERE source_id = ?`, "awesome-protected"); err != nil {
@@ -297,6 +309,7 @@ func TestSQLiteStoreLanguages(t *testing.T) {
 			t.Fatalf("UpsertRepo() error = %v", err)
 		}
 	}
+	replaceDiscoveryCatalog(t, store, 3, 4)
 	languages, err := store.ListLanguages(context.Background())
 	if err != nil {
 		t.Fatalf("ListLanguages() error = %v", err)
@@ -347,6 +360,7 @@ func TestSQLiteStoreDiscoverySummary(t *testing.T) {
 			t.Fatalf("UpsertRepo() error = %v", err)
 		}
 	}
+	replaceDiscoveryCatalog(t, store, 30, 31)
 	if err := store.ReplaceCategoryRanking(context.Background(), "most-popular", model.AllBucket, []model.RankingEntry{
 		{RepoID: 30, Rank: 1, Score: 0.9},
 	}); err != nil {
@@ -395,6 +409,86 @@ func TestSQLiteStoreDiscoverySummary(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreDiscoveryQueriesExcludeAwesomeOnlyRepositories(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := store.UpsertRepo(ctx, model.Repository{
+		GhRepoID: 80, Owner: "catalog", Name: "app", FullName: "catalog/app",
+		Language: "Swift", Stars: 1000, Topics: []string{"tools"}, Platforms: []string{"macos"},
+		PopularityScore: 0.9, DiscoveryScore: 0.8, IndexedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertRepo(catalog) error = %v", err)
+	}
+	replaceDiscoveryCatalog(t, store, 80)
+	if err := store.UpsertAwesomeRepositories(ctx, []model.Repository{
+		{
+			GhRepoID: 80, Owner: "catalog", Name: "app", FullName: "catalog/app",
+			Language: "Swift", Stars: 1100, Topics: []string{"tools"},
+		},
+		{
+			GhRepoID: 81, Owner: "awesome", Name: "only", FullName: "awesome/only",
+			Language: "Go", Stars: 5000, Topics: []string{"ai"},
+		},
+	}); err != nil {
+		t.Fatalf("UpsertAwesomeRepositories() error = %v", err)
+	}
+	if err := store.ReplaceCategoryRanking(ctx, "most-popular", model.AllBucket, []model.RankingEntry{
+		{RepoID: 81, Rank: 1, Score: 0.99},
+		{RepoID: 80, Rank: 2, Score: 0.9},
+	}); err != nil {
+		t.Fatalf("ReplaceCategoryRanking() error = %v", err)
+	}
+
+	allRepos, err := store.ListAllRepos(ctx)
+	if err != nil {
+		t.Fatalf("ListAllRepos() error = %v", err)
+	}
+	if len(allRepos) != 1 || allRepos[0].RepoID != 80 {
+		t.Fatalf("bulk catalog should contain only Discovery member: %+v", allRepos)
+	}
+	for name, page := range map[string]model.Page[model.DiscoveryItem]{
+		"scored": mustListScoredRepos(t, store, ctx),
+		"sorted": mustListSortedRepos(t, store, ctx),
+		"ranked": mustListCategoryRanking(t, store, ctx),
+	} {
+		if page.Total != 1 || len(page.Items) != 1 || page.Items[0].RepoID != 80 {
+			t.Fatalf("%s query leaked Awesome-only repository: %+v", name, page.Items)
+		}
+	}
+	languages, err := store.ListLanguages(ctx)
+	if err != nil {
+		t.Fatalf("ListLanguages() error = %v", err)
+	}
+	if len(languages) != 1 || languages[0].Key != "Swift" || languages[0].Count != 1 {
+		t.Fatalf("Discovery languages include Awesome-only facts: %+v", languages)
+	}
+	summary, err := store.DiscoverySummary(ctx)
+	if err != nil {
+		t.Fatalf("DiscoverySummary() error = %v", err)
+	}
+	if discover := findMode(t, summary, "discover"); discover.Total != 1 {
+		t.Fatalf("discover total = %d, want 1", discover.Total)
+	}
+	if popular := findMode(t, summary, "popular"); popular.Total != 1 {
+		t.Fatalf("popular total = %d, want 1", popular.Total)
+	}
+	entries, err := store.TopRankingEntries(ctx, "discovery_score", QueryFilters{}, 10)
+	if err != nil {
+		t.Fatalf("TopRankingEntries() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].RepoID != 80 {
+		t.Fatalf("ranking source leaked Awesome-only repository: %+v", entries)
+	}
+	var sharedFacts int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM repos`).Scan(&sharedFacts); err != nil {
+		t.Fatalf("count shared repository facts: %v", err)
+	}
+	if sharedFacts != 2 {
+		t.Fatalf("shared repository facts = %d, want 2", sharedFacts)
+	}
+}
+
 func TestSQLiteStoreNewReleaseEligibilityRequiresStableAssetRelease(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC()
@@ -427,6 +521,7 @@ func TestSQLiteStoreNewReleaseEligibilityRequiresStableAssetRelease(t *testing.T
 			t.Fatalf("UpsertRepo() error = %v", err)
 		}
 	}
+	replaceDiscoveryCatalog(t, store, 40, 41)
 	if err := store.UpsertRelease(context.Background(), model.Release{
 		GhRepoID:      40,
 		TagName:       "v1.0.0",
@@ -470,6 +565,40 @@ func newTestStore(t *testing.T) *SQLiteStore {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func replaceDiscoveryCatalog(t *testing.T, store *SQLiteStore, repoIDs ...int64) {
+	t.Helper()
+	if err := store.ReplaceDiscoveryCatalogMembership(context.Background(), repoIDs); err != nil {
+		t.Fatalf("ReplaceDiscoveryCatalogMembership() error = %v", err)
+	}
+}
+
+func mustListScoredRepos(t *testing.T, store *SQLiteStore, ctx context.Context) model.Page[model.DiscoveryItem] {
+	t.Helper()
+	page, err := store.ListScoredRepos(ctx, "discovery_score", QueryFilters{}, 1, 20)
+	if err != nil {
+		t.Fatalf("ListScoredRepos() error = %v", err)
+	}
+	return page
+}
+
+func mustListSortedRepos(t *testing.T, store *SQLiteStore, ctx context.Context) model.Page[model.DiscoveryItem] {
+	t.Helper()
+	page, err := store.ListSortedRepos(ctx, "stars_desc", QueryFilters{}, 1, 20)
+	if err != nil {
+		t.Fatalf("ListSortedRepos() error = %v", err)
+	}
+	return page
+}
+
+func mustListCategoryRanking(t *testing.T, store *SQLiteStore, ctx context.Context) model.Page[model.DiscoveryItem] {
+	t.Helper()
+	page, err := store.ListCategoryRanking(ctx, "most-popular", model.AllBucket, 1, 20)
+	if err != nil {
+		t.Fatalf("ListCategoryRanking() error = %v", err)
+	}
+	return page
 }
 
 func findMode(t *testing.T, summary model.DiscoverySummary, mode string) model.ModeSummary {

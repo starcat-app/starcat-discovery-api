@@ -75,16 +75,18 @@ func TestServiceSyncPrunesStaleReposOnlyForFullMode(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
 	for _, testCase := range []struct {
-		name       string
-		mode       string
-		wantPruned int
-		wantTotal  int
+		name             string
+		mode             string
+		wantPruned       int
+		wantCatalogTotal int
+		wantStoredTotal  int
 	}{
-		{name: "light sync keeps stale repos", mode: "scheduled-light", wantPruned: 0, wantTotal: 2},
-		{name: "full sync prunes stale repos", mode: "scheduled-full", wantPruned: 1, wantTotal: 1},
+		{name: "light sync hides but keeps stale repo facts", mode: "scheduled-light", wantPruned: 0, wantCatalogTotal: 1, wantStoredTotal: 2},
+		{name: "full sync prunes stale repo facts", mode: "scheduled-full", wantPruned: 1, wantCatalogTotal: 1, wantStoredTotal: 1},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "discovery.db"))
+			dbPath := filepath.Join(t.TempDir(), "discovery.db")
+			sqliteStore, err := store.NewSQLiteStore(ctx, dbPath)
 			if err != nil {
 				t.Fatalf("NewSQLiteStore() error = %v", err)
 			}
@@ -98,6 +100,9 @@ func TestServiceSyncPrunesStaleReposOnlyForFullMode(t *testing.T) {
 				IndexedAt:      now,
 			}); err != nil {
 				t.Fatalf("UpsertRepo(stale) error = %v", err)
+			}
+			if err := sqliteStore.ReplaceDiscoveryCatalogMembership(ctx, []int64{999}); err != nil {
+				t.Fatalf("seed stale catalog membership: %v", err)
 			}
 
 			service := NewService(sqliteStore, &fakeGitHubClient{}, 10)
@@ -113,8 +118,20 @@ func TestServiceSyncPrunesStaleReposOnlyForFullMode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ListScoredRepos() error = %v", err)
 			}
-			if page.Total != testCase.wantTotal {
-				t.Fatalf("total repos = %d, want %d; items=%+v", page.Total, testCase.wantTotal, page.Items)
+			if page.Total != testCase.wantCatalogTotal {
+				t.Fatalf("catalog total = %d, want %d; items=%+v", page.Total, testCase.wantCatalogTotal, page.Items)
+			}
+			readDB, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatalf("open sqlite for stored fact assertion: %v", err)
+			}
+			defer readDB.Close()
+			var storedTotal int
+			if err := readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM repos`).Scan(&storedTotal); err != nil {
+				t.Fatalf("count stored repository facts: %v", err)
+			}
+			if storedTotal != testCase.wantStoredTotal {
+				t.Fatalf("stored repository facts = %d, want %d", storedTotal, testCase.wantStoredTotal)
 			}
 		})
 	}
