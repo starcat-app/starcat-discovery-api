@@ -233,6 +233,41 @@ Candidate discovery still covers the eight `llm`, `machine-learning`, `privacy`,
 
 `/api/v1/discovery/bulk` returns the complete public catalog and summary. The Starcat client stores this data in its local-first cache and performs filtering, sorting, and pagination locally. `CACHE_TTL_SECONDS` controls the server's in-memory bulk cache TTL, which defaults to 10800 seconds (3 hours), matching the default incremental sync cadence and the client's freshness window. Each successful sync invalidates the cache, so the next `/bulk` request rebuilds the response from SQLite.
 
+## Linux.do Discovery
+
+Linux.do is an independent public catalog inside Discovery, not an additional service and not a member of the regular Discovery/Awesome catalogs. The macOS client never crawls the forum or sends its Stars list to this service.
+
+Collection is **disabled by default** (`LINUXDO_COLLECTION_ENABLED=false`). Enable it only after confirming automated-access authorization and accepting the limited RSS coverage. Enabling schedules one run at minutes 11 and 41; it does not start an immediate startup crawl. Public queries continue to serve the last published SQLite snapshot while collection is disabled.
+
+| Method / path | Authentication | Purpose |
+|---|---|---|
+| `GET /api/v1/discovery/linuxdo/bulk` | API key | Complete unique repository catalog plus `promotion_dates` |
+| `GET /api/v1/discovery/linuxdo/provenance` | API key | Compact repository-ID / topic-count / verification-time index |
+| `GET /api/v1/discovery/linuxdo/repos/{gh_repo_id}/topics` | API key | Original discussion links, titles and dates |
+| `POST /internal/sync/linuxdo` | Admin key | Bounded synchronous collection; returns 503 while disabled |
+| `GET /internal/discovery/linuxdo/candidates?after=0` | Admin key | Persistent review queue, up to 100 rows; use the last ID as the next cursor |
+| `POST /internal/discovery/linuxdo/candidates/{candidate_id}/review` | Admin key | Publish, reject or withdraw a candidate |
+
+All three public payloads contain `revision`, `generated_at` and `complete`. `promotion_dates` maps repository IDs to the most recent published discussion date, not GitHub repository creation time. An empty complete response is a valid withdrawal snapshot, not a network failure.
+
+Review body example (use the **current** candidate `content_hash`):
+
+```json
+{"content_hash":"current-evidence-hash","decision":"publish","license_reviewed":false,"reason":"Confirmed project promotion"}
+```
+
+`decision` accepts `publish`, `reject`, or `withdraw`. Publishing re-verifies GitHub visibility and identity. Unknown/custom licenses require `license_reviewed=true` and a nonempty review reason; private repositories are never published. Automatic publication is limited to a single explicit source/project-address link with a recognized open-source license. Code blocks, quotations, image-only badges and duplicate oneboxes are excluded. Ambiguous candidates remain in review. Rejection and withdrawal are sticky across subsequent RSS observations.
+
+Cache and failure behavior:
+
+- SQLite stores topics, durable candidates, reviewed many-to-many relations and the publication revision in an additive migration. Repository facts reuse the existing safe metadata upsert without overwriting ranking scores.
+- An independent 30-minute response cache reuses the bounded LRU/inflight implementation: 64 entries / 32 MiB, pre-encoded JSON/gzip and ETags. Publication/retraction replaces its generation; old in-flight work cannot repopulate the new cache.
+- RSS validators advance only after observations and candidates commit. A 304 retries unfinished candidates. HTML challenge pages, truncated XML and HTTP failures retain prior publications; an empty RSS window is conservatively rejected, never interpreted as deletion.
+- RSS disappearance is not deletion. The service does not fetch replies or bypass login/challenges, cannot guarantee historical coverage or observe edits outside the feed window, and does not claim automatic removal detection. Use explicit withdrawal for confirmed removals.
+- The HTML parser adds `golang.org/x/net v0.58.0` (Go 1.25 compatible); `go mod tidy` updates its required `x/sys` version and correctly records the existing direct Goldmark import. The module's Go baseline is unchanged.
+
+Offline tests use synthetic RSS, `httptest` and temporary SQLite databases. Production collection, deployment and macOS GUI acceptance are separate gates.
+
 ## Deployment
 
 ```bash

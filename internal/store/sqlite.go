@@ -304,6 +304,9 @@ func (s *SQLiteStore) PruneReposNotIn(ctx context.Context, keepIDs []int64) (int
 			  AND ae.is_active = 1
 			  AND ae.target_type = 'github_repo'
 		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM linuxdo_repo_topics lp WHERE lp.gh_repo_id = repos.gh_repo_id
+		  )
 	`, args...)
 	if err != nil {
 		return 0, err

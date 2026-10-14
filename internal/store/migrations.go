@@ -286,7 +286,10 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 	if err := ensureAwesomeRepositoryMetadataVersion(ctx, db); err != nil {
 		return err
 	}
-	return ensureAwesomeParserSchema(ctx, db)
+	if err := ensureAwesomeParserSchema(ctx, db); err != nil {
+		return err
+	}
+	return ensureLinuxDoSchema(ctx, db)
 }
 
 const discoveryCatalogMembershipMigration = "2026-09-21-discovery-catalog-membership"

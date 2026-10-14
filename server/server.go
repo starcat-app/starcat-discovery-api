@@ -18,6 +18,7 @@ import (
 	"github.com/starcat-app/starcat-discovery-api/internal/github"
 	"github.com/starcat-app/starcat-discovery-api/internal/handler"
 	"github.com/starcat-app/starcat-discovery-api/internal/ingest"
+	"github.com/starcat-app/starcat-discovery-api/internal/linuxdo"
 	"github.com/starcat-app/starcat-discovery-api/internal/middleware"
 	"github.com/starcat-app/starcat-discovery-api/internal/scheduler"
 	"github.com/starcat-app/starcat-discovery-api/internal/starhistory"
@@ -34,6 +35,7 @@ type Service struct {
 	handler            http.Handler
 	store              *store.SQLiteStore
 	scheduler          *scheduler.Scheduler
+	linuxDoScheduler   *scheduler.Scheduler
 	starHistoryService *starhistory.Service
 	metrics            *kitmetrics.Collector
 
@@ -98,6 +100,9 @@ func New(cfg config.Config) (*Service, error) {
 	awesomeService := awesome.NewService(sqliteStore, githubClient, awesomeCache)
 	awesomeHandler := handler.NewAwesomeHandler(awesomeService, awesomeCache)
 	awesomeAdminHandler := handler.NewAwesomeAdminHandler(awesomeService)
+	linuxDoCache := handler.NewLinuxDoResponseCache(30 * time.Minute)
+	linuxDoService := linuxdo.NewService(sqliteStore, githubClient, cfg.LinuxDoEnabled, linuxDoCache)
+	linuxDoHandler := handler.NewLinuxDoHandler(linuxDoService, linuxDoCache)
 
 	var starHistoryService *starhistory.Service
 	if cfg.StarHistoryEnabled {
@@ -144,9 +149,14 @@ func New(cfg config.Config) (*Service, error) {
 	)
 
 	var sch *scheduler.Scheduler
+	var linuxDoScheduler *scheduler.Scheduler
 	if cfg.SyncEnabled {
 		sch = scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache, awesomeService)
 		sch.Start()
+	}
+	if cfg.LinuxDoEnabled {
+		linuxDoScheduler = scheduler.NewLinuxDo(linuxDoService)
+		linuxDoScheduler.Start()
 	}
 
 	mux := http.NewServeMux()
@@ -157,6 +167,12 @@ func New(cfg config.Config) (*Service, error) {
 	mux.Handle("GET /api/v1/discovery/categories/new-releases", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleNewReleases)))
 	mux.Handle("GET /api/v1/discovery/summary", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleSummary)))
 	mux.Handle("GET /api/v1/discovery/bulk", apiAuth.Wrap(discoveryHandler.HandleBulk(bulkCache)))
+	mux.Handle("GET /api/v1/discovery/linuxdo/bulk", apiAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandlePublic)))
+	mux.Handle("GET /api/v1/discovery/linuxdo/provenance", apiAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandlePublic)))
+	mux.Handle("GET /api/v1/discovery/linuxdo/repos/{gh_repo_id}/topics", apiAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandlePublic)))
+	mux.Handle("POST /internal/sync/linuxdo", adminAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandleSync)))
+	mux.Handle("GET /internal/discovery/linuxdo/candidates", adminAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandleCandidates)))
+	mux.Handle("POST /internal/discovery/linuxdo/candidates/{candidate_id}/review", adminAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandleReview)))
 	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
 	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
 	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))
@@ -189,6 +205,7 @@ func New(cfg config.Config) (*Service, error) {
 		handler:            metricsCollector.Wrap(middleware.CORS(mux)),
 		store:              sqliteStore,
 		scheduler:          sch,
+		linuxDoScheduler:   linuxDoScheduler,
 		starHistoryService: starHistoryService,
 		metrics:            metricsCollector,
 	}, nil
@@ -206,6 +223,9 @@ func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		if s.scheduler != nil {
 			s.scheduler.Stop()
+		}
+		if s.linuxDoScheduler != nil {
+			s.linuxDoScheduler.Stop()
 		}
 		if s.starHistoryService != nil {
 			s.starHistoryService.Close()
