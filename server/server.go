@@ -35,7 +35,7 @@ type Service struct {
 	handler            http.Handler
 	store              *store.SQLiteStore
 	scheduler          *scheduler.Scheduler
-	linuxDoScheduler   *scheduler.Scheduler
+	linuxDoScheduler   *scheduler.LinuxDoScheduler
 	starHistoryService *starhistory.Service
 	metrics            *kitmetrics.Collector
 
@@ -149,7 +149,7 @@ func New(cfg config.Config) (*Service, error) {
 	)
 
 	var sch *scheduler.Scheduler
-	var linuxDoScheduler *scheduler.Scheduler
+	var linuxDoScheduler *scheduler.LinuxDoScheduler
 	if cfg.SyncEnabled {
 		sch = scheduler.New(ingestService, cfg.SyncCron, cfg.FullSyncCron, bulkCache, awesomeService)
 		sch.Start()

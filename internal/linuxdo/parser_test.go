@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
@@ -189,5 +191,71 @@ func TestCollectorReparsesWhenRulesChange(t *testing.T) {
 	observations, state, err := collector.Fetch(context.Background(), model.LinuxDoFeedState{ETag: `"unchanged"`, LastModified: "Wed, 14 Oct 2026 00:00:00 GMT", RuleVersion: model.LinuxDoRuleVersion - 1})
 	if err != nil || len(observations) != 1 || !observations[0].Candidates[0].ExplicitPromotion || state.RuleVersion != model.LinuxDoRuleVersion {
 		t.Fatalf("rule upgrade did not reparse RSS: %+v %+v %v", observations, state, err)
+	}
+}
+
+// 站方的冷却可以长于 5 小时随机上限；不能靠手动同步或重抽间隔提前发请求。
+func TestCollectorRespectsRetryAfter(t *testing.T) {
+	for _, format := range []string{"seconds", "http_date"} {
+		t.Run(format, func(t *testing.T) {
+			now := time.Now().UTC().Truncate(time.Second)
+			deadline := now.Add(6 * time.Hour)
+			header := "21600"
+			if format == "http_date" {
+				header = deadline.Format(http.TimeFormat)
+			}
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.Header().Set("Retry-After", header)
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				w.Header().Set("Content-Type", "application/rss+xml")
+				w.Header().Set("ETag", `"new"`)
+				fmt.Fprint(w, syntheticFeed(`<p>源码 <a href="https://github.com/me/app">app</a></p>`))
+			}))
+			defer upstream.Close()
+			collector := NewCollector()
+			collector.url = upstream.URL
+			state := model.LinuxDoFeedState{ETag: `"old"`, CheckedAt: now, RuleVersion: model.LinuxDoRuleVersion}
+			for range 3 {
+				observations, gotState, err := collector.Fetch(context.Background(), state)
+				if err == nil || observations != nil || gotState != state {
+					t.Fatalf("rate limit advanced feed state: %+v %+v %v", observations, gotState, err)
+				}
+			}
+			if calls.Load() != 1 || collector.notBefore.Before(deadline) {
+				t.Fatalf("ignored Retry-After: calls=%d deadline=%s", calls.Load(), collector.notBefore)
+			}
+			// 只模拟冷却到期，不真的等待六小时或修改生产时钟。
+			collector.notBefore = time.Now().Add(-time.Second)
+			observations, gotState, err := collector.Fetch(context.Background(), state)
+			if err != nil || len(observations) != 1 || gotState.ETag != `"new"` || calls.Load() != 2 {
+				t.Fatalf("collector did not resume after cooldown: %+v %+v %v", observations, gotState, err)
+			}
+		})
+	}
+}
+
+func TestRetryAfterDeadline(t *testing.T) {
+	now := time.Date(2026, time.October, 18, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		header string
+		want   time.Time
+	}{
+		{"600", now.Add(10 * time.Minute)},
+		{" 0 ", now},
+		{now.Add(6 * time.Hour).Format(http.TimeFormat), now.Add(6 * time.Hour)},
+		{now.Add(-time.Hour).Format(http.TimeFormat), time.Time{}},
+		{"", time.Time{}},
+		{"-1", time.Time{}},
+		{"1.5", time.Time{}},
+		{"999999999999999999999999", time.Time{}},
+		{"not a deadline", time.Time{}},
+	} {
+		if got := retryAfterDeadline(test.header, now); !got.Equal(test.want) {
+			t.Errorf("%q: got %s, want %s", test.header, got, test.want)
+		}
 	}
 }

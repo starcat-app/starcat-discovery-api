@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,6 +102,99 @@ func TestDefaultDisabledDoesNotMakeRequests(t *testing.T) {
 	service := NewService(db, github, false, nil)
 	if _, err := service.Sync(ctx, "manual"); !errors.Is(err, ErrDisabled) || github.calls != 0 {
 		t.Fatal("disabled collector made request")
+	}
+}
+
+// 窗口只决定本轮能观察到什么，不是历史目录的替换清单；重启后仍保留唯一仓库与多个回链。
+func TestSyncDeduplicatesAndPersistsProjectsOutsideRSSWindow(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "retained.db")
+	db, err := store.NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	type response struct {
+		status int
+		body   string
+	}
+	body := `<p>项目地址 <a href="https://github.com/Owner/App">app</a> <a href="https://github.com/owner/app/releases/latest">下载</a></p>`
+	feed := syntheticFeed(body)
+	var next atomic.Value
+	next.Store(response{http.StatusOK, feed})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		value := next.Load().(response)
+		w.Header().Set("Content-Type", "application/rss+xml")
+		w.Header().Set("ETag", `"feed"`)
+		if value.status == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "21600")
+		}
+		w.WriteHeader(value.status)
+		fmt.Fprint(w, value.body)
+	}))
+	defer upstream.Close()
+	github := &fakeGitHub{license: "MIT"}
+	service := NewService(db, github, true, nil)
+	service.collector.url = upstream.URL
+	for range 3 {
+		if _, err := service.Sync(ctx, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := service.Snapshot(ctx)
+	if err != nil || len(before.Repositories) != 1 || len(before.Topics[123]) != 1 || github.calls != 1 {
+		t.Fatalf("repeated input duplicated publication: %+v calls=%d err=%v", before, github.calls, err)
+	}
+	// 同一个项目被第二篇帖子推广，应累积回链而不是重复创建仓库或移除第一篇回链。
+	next.Store(response{http.StatusOK, strings.ReplaceAll(feed, "topic/42", "topic/43")})
+	if _, err := service.Sync(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	before, err = service.Snapshot(ctx)
+	if err != nil || len(before.Repositories) != 1 || len(before.Origins) != 1 || before.Origins[0].TopicCount != 2 || len(before.Topics[123]) != 2 {
+		t.Fatalf("cross-topic repository deduplication failed: %+v %v", before, err)
+	}
+	next.Store(response{http.StatusOK, strings.ReplaceAll(syntheticFeed(`<p>本帖没有直接仓库链接。</p>`), "topic/42", "topic/44")})
+	if _, err := service.Sync(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	// 完整但不含旧项目的窗口、304、空窗口、坏 XML 和 HTTP 失败都不能删除已发布关系。
+	for _, value := range []response{
+		{http.StatusNotModified, ""},
+		{http.StatusOK, `<rss><channel><link>https://linux.do/tag/2234-tag/2234</link></channel></rss>`},
+		{http.StatusOK, "<rss>"},
+		{http.StatusForbidden, "challenge"},
+		{http.StatusInternalServerError, "unavailable"},
+		{http.StatusTooManyRequests, "rate limited"},
+	} {
+		after, err := service.Snapshot(ctx)
+		if err != nil || after.Revision != before.Revision || len(after.Repositories) != 1 || len(after.Topics[123]) != 2 {
+			t.Fatalf("rolling window withdrew publication: %+v %v", after, err)
+		}
+		next.Store(value)
+		_, syncErr := service.Sync(ctx, "test")
+		if value.status == http.StatusNotModified && syncErr != nil {
+			t.Fatal(syncErr)
+		}
+		if value.status != http.StatusNotModified && syncErr == nil {
+			t.Fatalf("accepted failed input: %+v", value)
+		}
+	}
+	// 关闭并重开同一 SQLite 文件，证明数据不是只存活在服务的内存缓存中。
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = store.NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := db.LinuxDoSnapshot(ctx)
+	if err != nil || !after.Complete || after.Revision != before.Revision || len(after.Repositories) != 1 || len(after.Origins) != 1 || len(after.Topics[123]) != 2 {
+		t.Fatalf("restart lost retained catalog: %+v %v", after, err)
+	}
+	candidates, err := db.LinuxDoCandidates(ctx, 0)
+	if err != nil || len(candidates) != 2 || candidates[0].State != "published" || candidates[1].State != "published" {
+		t.Fatalf("duplicate or lost candidates after restart: %+v %v", candidates, err)
 	}
 }
 

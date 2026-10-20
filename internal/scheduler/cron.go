@@ -45,13 +45,6 @@ func New(syncer SyncService, syncSpec, fullSyncSpec string, invalidator CacheInv
 	return &Scheduler{cron: c, invalidator: invalidator}
 }
 
-// NewLinuxDo 独立于普通目录调度；只有服务装配确认采集授权后才创建，不在启动时立即抓取。
-func NewLinuxDo(syncer SyncService) *Scheduler {
-	c := cron.New()
-	mustAdd(c, "11,41 * * * *", func() { run(syncer, "scheduled", nil) })
-	return &Scheduler{cron: c}
-}
-
 func runAwesome(syncers []AwesomeSyncService) {
 	for _, syncer := range syncers {
 		if syncer == nil {

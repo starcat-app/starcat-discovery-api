@@ -237,7 +237,9 @@ Candidate discovery still covers the eight `llm`, `machine-learning`, `privacy`,
 
 Linux.do is an independent public catalog inside Discovery, not an additional service and not a member of the regular Discovery/Awesome catalogs. The macOS client never crawls the forum or sends its Stars list to this service.
 
-Collection is **disabled by default** (`LINUXDO_COLLECTION_ENABLED=false`). Enable it only after confirming automated-access authorization and accepting the limited RSS coverage. Enabling schedules one run at minutes 11 and 41; it does not start an immediate startup crawl. Public queries continue to serve the last published SQLite snapshot while collection is disabled.
+Collection is **disabled by default** (`LINUXDO_COLLECTION_ENABLED=false`). Enable it only after confirming automated-access authorization and accepting the limited RSS coverage. The first run and every subsequent run wait a fresh uniformly random interval between **5 minutes and 5 hours**, measured from the completion of the previous run. Runs are serial, and the next planned time is logged. Restarting the service selects a new initial delay rather than crawling immediately; no persisted scheduling table is added. Public queries continue to serve the last published SQLite snapshot while collection is disabled.
+
+Random timing controls request frequency; it does not bypass access restrictions or guarantee complete coverage. HTTP 403 ends the current run without an immediate retry or challenge handling. HTTP 429 honors valid `Retry-After` seconds or HTTP dates through an in-process cooldown, including delays longer than five hours; manual triggers cannot issue RSS requests during that cooldown. The cooldown is not retained across process restarts. A long interval can miss topics that enter and leave the rolling feed between collections.
 
 | Method / path | Authentication | Purpose |
 |---|---|---|
