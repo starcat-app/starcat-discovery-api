@@ -3,6 +3,9 @@ package model
 
 import "time"
 
+// LinuxDoRuleVersion 在识别语义变化时递增，使 RSS 304 和旧跳过结果都能自动重判。
+const LinuxDoRuleVersion = 2
+
 // LinuxDoTopic 只保存公开首帖的摘要与回链，不复制帖子全文或用户身份。
 type LinuxDoTopic struct {
 	ID          int64  `json:"id"`
@@ -13,18 +16,20 @@ type LinuxDoTopic struct {
 	ContentHash string `json:"-"`
 }
 
-// LinuxDoCandidate 是持久化审核队列；证据版本防止旧页面批准了已编辑的新内容。
+// LinuxDoCandidate 保存自动判定及证据版本；pending 仅表示尚未完成机器核验。
 type LinuxDoCandidate struct {
-	ID                int64  `json:"id"`
-	TopicID           int64  `json:"topic_id"`
-	FullName          string `json:"full_name"`
-	ContentHash       string `json:"content_hash"`
-	Context           string `json:"context"`
+	ID          int64  `json:"id"`
+	TopicID     int64  `json:"topic_id"`
+	FullName    string `json:"full_name"`
+	ContentHash string `json:"content_hash"`
+	Context     string `json:"context"`
+	// 综合识别结论，不再表示“出现少数固定关键词”。
 	ExplicitPromotion bool   `json:"explicit_promotion"`
 	State             string `json:"state"`
 	Reason            string `json:"reason"`
 	RepoID            int64  `json:"repo_id"`
 	License           string `json:"license"`
+	RuleVersion       int    `json:"rule_version"`
 }
 
 // LinuxDoObservation 是一次 RSS 中实际看到的首帖；缺席不代表删除。
@@ -56,4 +61,5 @@ type LinuxDoFeedState struct {
 	ETag         string
 	LastModified string
 	CheckedAt    time.Time
+	RuleVersion  int
 }

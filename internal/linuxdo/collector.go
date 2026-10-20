@@ -31,10 +31,12 @@ func (c *Collector) Fetch(ctx context.Context, state model.LinuxDoFeedState) ([]
 	}
 	req.Header.Set("User-Agent", "Starcat-Discovery/2.0 (+https://starcat.ink)")
 	req.Header.Set("Accept", "application/rss+xml, application/xml")
-	if state.ETag != "" {
+	// 规则变化必须重新读取同一页 RSS；不能让旧 ETag 的 304 永久跳过新识别逻辑。
+	conditional := state.RuleVersion == model.LinuxDoRuleVersion
+	if conditional && state.ETag != "" {
 		req.Header.Set("If-None-Match", state.ETag)
 	}
-	if state.LastModified != "" {
+	if conditional && state.LastModified != "" {
 		req.Header.Set("If-Modified-Since", state.LastModified)
 	}
 	response, err := c.client.Do(req)
@@ -43,7 +45,7 @@ func (c *Collector) Fetch(ctx context.Context, state model.LinuxDoFeedState) ([]
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotModified {
-		if state.ETag == "" && state.LastModified == "" {
+		if !conditional || (state.ETag == "" && state.LastModified == "") {
 			return nil, state, fmt.Errorf("unexpected Linux.do 304")
 		}
 		state.CheckedAt = time.Now().UTC()
@@ -60,5 +62,5 @@ func (c *Collector) Fetch(ctx context.Context, state model.LinuxDoFeedState) ([]
 	if err != nil {
 		return nil, state, err
 	}
-	return observations, model.LinuxDoFeedState{ETag: response.Header.Get("ETag"), LastModified: response.Header.Get("Last-Modified"), CheckedAt: time.Now().UTC()}, nil
+	return observations, model.LinuxDoFeedState{ETag: response.Header.Get("ETag"), LastModified: response.Header.Get("Last-Modified"), CheckedAt: time.Now().UTC(), RuleVersion: model.LinuxDoRuleVersion}, nil
 }

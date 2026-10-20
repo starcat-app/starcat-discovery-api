@@ -172,7 +172,6 @@ func New(cfg config.Config) (*Service, error) {
 	mux.Handle("GET /api/v1/discovery/linuxdo/repos/{gh_repo_id}/topics", apiAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandlePublic)))
 	mux.Handle("POST /internal/sync/linuxdo", adminAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandleSync)))
 	mux.Handle("GET /internal/discovery/linuxdo/candidates", adminAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandleCandidates)))
-	mux.Handle("POST /internal/discovery/linuxdo/candidates/{candidate_id}/review", adminAuth.Wrap(http.HandlerFunc(linuxDoHandler.HandleReview)))
 	mux.Handle("GET /api/v1/discovery/languages", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleLanguages)))
 	mux.Handle("GET /api/v1/discovery/topics", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandleTopics)))
 	mux.Handle("GET /api/v1/discovery/platforms", apiAuth.Wrap(http.HandlerFunc(discoveryHandler.HandlePlatforms)))

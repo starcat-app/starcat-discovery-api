@@ -245,25 +245,22 @@ Collection is **disabled by default** (`LINUXDO_COLLECTION_ENABLED=false`). Enab
 | `GET /api/v1/discovery/linuxdo/provenance` | API key | Compact repository-ID / topic-count / verification-time index |
 | `GET /api/v1/discovery/linuxdo/repos/{gh_repo_id}/topics` | API key | Original discussion links, titles and dates |
 | `POST /internal/sync/linuxdo` | Admin key | Bounded synchronous collection; returns 503 while disabled |
-| `GET /internal/discovery/linuxdo/candidates?after=0` | Admin key | Persistent review queue, up to 100 rows; use the last ID as the next cursor |
-| `POST /internal/discovery/linuxdo/candidates/{candidate_id}/review` | Admin key | Publish, reject or withdraw a candidate |
+| `GET /internal/discovery/linuxdo/candidates?after=0` | Admin key | Read-only automatic classification diagnostics, up to 100 rows; use the last ID as the next cursor |
 
 All three public payloads contain `revision`, `generated_at` and `complete`. `promotion_dates` maps repository IDs to the most recent published discussion date, not GitHub repository creation time. An empty complete response is a valid withdrawal snapshot, not a network failure.
 
-Review body example (use the **current** candidate `content_hash`):
+Collection and publication are fully automatic; there is no manual approval endpoint or review queue. Topic titles, local link labels (including `GitHub:` and address labels), plain URLs, and GitHub preview targets identify promoted projects. References, dependencies, code blocks, quotations and image-only badges are excluded. Multiple repositories are classified separately; unattributed candidates are automatically skipped with a reason rather than waiting for a person.
 
-```json
-{"content_hash":"current-evidence-hash","decision":"publish","license_reviewed":false,"reason":"Confirmed project promotion"}
-```
+GitHub repository identity and public visibility are verified before publication. Unknown, missing or custom licenses are preserved as metadata and do not block source inclusion. The Linux.do badge describes a promotion relationship, not a license endorsement or code-quality assessment. Confirmed private repositories are automatically withdrawn; ambiguous upstream/network errors keep the last valid publication and are retried.
 
-`decision` accepts `publish`, `reject`, or `withdraw`. Publishing re-verifies GitHub visibility and identity. Unknown/custom licenses require `license_reviewed=true` and a nonempty review reason; private repositories are never published. Automatic publication is limited to a single explicit source/project-address link with a recognized open-source license. Code blocks, quotations, image-only badges and duplicate oneboxes are excluded. Ambiguous candidates remain in review. Rejection and withdrawal are sticky across subsequent RSS observations.
+The additive `2026-10-18-linuxdo-automatic-classification` migration preserves existing publications, candidate IDs and RSS checkpoints. Candidates use `pending`, `published` or `skipped` states with a `rule_version`. A new rule version forces an unconditional RSS fetch and reclassifies stored minimal evidence, including topics no longer in the current RSS window. Content edits reset affected classifications automatically. RSS remains a single rolling page; this does not backfill forum history.
 
 Cache and failure behavior:
 
-- SQLite stores topics, durable candidates, reviewed many-to-many relations and the publication revision in an additive migration. Repository facts reuse the existing safe metadata upsert without overwriting ranking scores.
+- SQLite stores topics, durable candidates, published many-to-many relations and the publication revision in an additive migration. Repeated observations deduplicate by topic/repository identity, and retained publications survive restarts. Repository facts reuse the existing safe metadata upsert without overwriting ranking scores.
 - An independent 30-minute response cache reuses the bounded LRU/inflight implementation: 64 entries / 32 MiB, pre-encoded JSON/gzip and ETags. Publication/retraction replaces its generation; old in-flight work cannot repopulate the new cache.
 - RSS validators advance only after observations and candidates commit. A 304 retries unfinished candidates. HTML challenge pages, truncated XML and HTTP failures retain prior publications; an empty RSS window is conservatively rejected, never interpreted as deletion.
-- RSS disappearance is not deletion. The service does not fetch replies or bypass login/challenges, cannot guarantee historical coverage or observe edits outside the feed window, and does not claim automatic removal detection. Use explicit withdrawal for confirmed removals.
+- RSS disappearance is not deletion: a later window never replaces or prunes the accumulated catalog. Confirmed private repositories or observed promotion-role changes still follow the existing withdrawal rules. The service does not fetch replies or bypass login/challenges, cannot guarantee historical coverage or observe edits outside the feed window, and does not claim automatic removal detection.
 - The HTML parser adds `golang.org/x/net v0.58.0` (Go 1.25 compatible); `go mod tidy` updates its required `x/sys` version and correctly records the existing direct Goldmark import. The module's Go baseline is unchanged.
 
 Offline tests use synthetic RSS, `httptest` and temporary SQLite databases. Production collection, deployment and macOS GUI acceptance are separate gates.

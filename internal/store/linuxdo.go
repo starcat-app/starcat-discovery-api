@@ -11,19 +11,19 @@ import (
 	"github.com/starcat-app/starcat-discovery-api/internal/model"
 )
 
-var ErrLinuxDoConflict = errors.New("Linux.do candidate changed; reload before reviewing")
+var ErrLinuxDoConflict = errors.New("Linux.do candidate changed; retry synchronization")
 
 // LinuxDoFeedState 读取上次已提交的采集游标，服务重启后仍能条件请求。
 func (s *SQLiteStore) LinuxDoFeedState(ctx context.Context) (model.LinuxDoFeedState, error) {
 	var state model.LinuxDoFeedState
 	var checked string
-	err := s.db.QueryRowContext(ctx, `SELECT etag,last_modified,checked_at FROM linuxdo_state WHERE id=1`).Scan(&state.ETag, &state.LastModified, &checked)
+	err := s.db.QueryRowContext(ctx, `SELECT etag,last_modified,checked_at,rule_version FROM linuxdo_state WHERE id=1`).Scan(&state.ETag, &state.LastModified, &checked, &state.RuleVersion)
 	state.CheckedAt = parseStoredTime(checked)
 	return state, err
 }
 
 // ObserveLinuxDo 先把首帖和候选落盘再推进 ETag，核验失败的候选可跨重启重试。
-// RSS 是滑动窗口：没有看到的帖子/链接不做撤回，旧发布关系必须由明确审核撤回。
+// RSS 是滑动窗口：没有看到的帖子/链接不等于删除，不能因此清空历史来源关系。
 func (s *SQLiteStore) ObserveLinuxDo(ctx context.Context, observations []model.LinuxDoObservation, state model.LinuxDoFeedState) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -44,16 +44,17 @@ func (s *SQLiteStore) ObserveLinuxDo(ctx context.Context, observations []model.L
 			return err
 		}
 		for _, candidate := range observation.Candidates {
-			_, err = tx.ExecContext(ctx, `INSERT INTO linuxdo_candidates(topic_id,full_name,content_hash,context,explicit_promotion) VALUES(?,?,?,?,?)
+			_, err = tx.ExecContext(ctx, `INSERT INTO linuxdo_candidates(topic_id,full_name,content_hash,context,explicit_promotion,rule_version,reason) VALUES(?,?,?,?,?,?,?)
 				ON CONFLICT(topic_id,full_name) DO UPDATE SET
-				state=CASE WHEN content_hash<>excluded.content_hash AND state NOT IN ('rejected','withdrawn') THEN 'pending' ELSE state END,
-				content_hash=excluded.content_hash,context=excluded.context,explicit_promotion=excluded.explicit_promotion`, topic.ID, candidate.FullName, candidate.ContentHash, candidate.Context, boolInt(candidate.ExplicitPromotion))
+				state=CASE WHEN content_hash<>excluded.content_hash OR rule_version<>excluded.rule_version OR explicit_promotion<>excluded.explicit_promotion THEN 'pending' ELSE state END,
+				reason=CASE WHEN content_hash<>excluded.content_hash OR rule_version<>excluded.rule_version OR explicit_promotion<>excluded.explicit_promotion THEN excluded.reason ELSE reason END,
+				content_hash=excluded.content_hash,context=excluded.context,explicit_promotion=excluded.explicit_promotion,rule_version=excluded.rule_version`, topic.ID, candidate.FullName, candidate.ContentHash, candidate.Context, boolInt(candidate.ExplicitPromotion), candidate.RuleVersion, candidate.Reason)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE linuxdo_state SET etag=?,last_modified=?,checked_at=? WHERE id=1`, state.ETag, state.LastModified, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE linuxdo_state SET etag=?,last_modified=?,checked_at=?,rule_version=? WHERE id=1`, state.ETag, state.LastModified, now, state.RuleVersion); err != nil {
 		return err
 	}
 	if publicChanged {
@@ -64,9 +65,9 @@ func (s *SQLiteStore) ObserveLinuxDo(ctx context.Context, observations []model.L
 	return tx.Commit()
 }
 
-const linuxDoCandidateSelect = `SELECT c.id,c.topic_id,c.full_name,c.content_hash,c.context,c.explicit_promotion,c.state,c.reason,c.gh_repo_id,c.license FROM linuxdo_candidates c`
+const linuxDoCandidateSelect = `SELECT c.id,c.topic_id,c.full_name,c.content_hash,c.context,c.explicit_promotion,c.state,c.reason,c.gh_repo_id,c.license,c.rule_version FROM linuxdo_candidates c`
 
-// LinuxDoCandidates 提供游标式人工审核列表，避免大队列一次载入。
+// LinuxDoCandidates 仅用于自动判定的只读诊断，不提供人工审批入口。
 func (s *SQLiteStore) LinuxDoCandidates(ctx context.Context, after int64) ([]model.LinuxDoCandidate, error) {
 	rows, err := s.db.QueryContext(ctx, linuxDoCandidateSelect+` WHERE c.id>? ORDER BY c.id LIMIT 100`, after)
 	if err != nil {
@@ -77,12 +78,12 @@ func (s *SQLiteStore) LinuxDoCandidates(ctx context.Context, after int64) ([]mod
 }
 
 // LinuxDoVerificationQueue 重试未完成候选，并低频重验仍在 RSS 可见范围的公开关系。
-// 审核拒绝是粘性的，自动采集不得因为帖子编辑而推翻人工决定。
+// 自动跳过不反复消耗 GitHub 配额；内容或规则变化会由分类写入路径重新置为 pending。
 func (s *SQLiteStore) LinuxDoVerificationQueue(ctx context.Context) ([]model.LinuxDoCandidate, error) {
 	rows, err := s.db.QueryContext(ctx, linuxDoCandidateSelect+` JOIN linuxdo_topics t ON t.id=c.topic_id
-		WHERE c.content_hash=t.content_hash AND (c.state='pending' OR (c.state='published' AND t.last_seen_at>=? AND EXISTS(
+		WHERE c.content_hash=t.content_hash AND c.rule_version=? AND (c.state='pending' OR (c.state='published' AND t.last_seen_at>=? AND EXISTS(
 			SELECT 1 FROM linuxdo_repo_topics p WHERE p.topic_id=c.topic_id AND p.gh_repo_id=c.gh_repo_id AND p.verified_at<?)))
-		ORDER BY CASE WHEN c.state='pending' THEN 0 ELSE 1 END,c.id LIMIT 100`, timeString(time.Now().Add(-7*24*time.Hour)), timeString(time.Now().Add(-24*time.Hour)))
+		ORDER BY CASE WHEN c.state='pending' THEN 0 ELSE 1 END,c.id LIMIT 100`, model.LinuxDoRuleVersion, timeString(time.Now().Add(-7*24*time.Hour)), timeString(time.Now().Add(-24*time.Hour)))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +93,7 @@ func (s *SQLiteStore) LinuxDoVerificationQueue(ctx context.Context) ([]model.Lin
 
 func scanLinuxDoCandidate(row rowScanner) (model.LinuxDoCandidate, error) {
 	var c model.LinuxDoCandidate
-	err := row.Scan(&c.ID, &c.TopicID, &c.FullName, &c.ContentHash, &c.Context, &c.ExplicitPromotion, &c.State, &c.Reason, &c.RepoID, &c.License)
+	err := row.Scan(&c.ID, &c.TopicID, &c.FullName, &c.ContentHash, &c.Context, &c.ExplicitPromotion, &c.State, &c.Reason, &c.RepoID, &c.License, &c.RuleVersion)
 	return c, err
 }
 
@@ -108,14 +109,60 @@ func scanLinuxDoCandidates(rows *sql.Rows) ([]model.LinuxDoCandidate, error) {
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) LinuxDoCandidate(ctx context.Context, id int64) (model.LinuxDoCandidate, error) {
-	return scanLinuxDoCandidate(s.db.QueryRowContext(ctx, linuxDoCandidateSelect+` WHERE c.id=?`, id))
+// LinuxDoStaleObservations 按帖子取旧规则证据，不能只取待处理项后误把多仓库变成单仓库。
+// 每轮最多重判 100 篇；仅返回最小上下文，不复制全文，也不冒充这些帖子刚在 RSS 中出现。
+func (s *SQLiteStore) LinuxDoStaleObservations(ctx context.Context, version int) ([]model.LinuxDoObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.topic_id,c.full_name,c.content_hash,c.context,c.explicit_promotion,c.state,c.reason,c.gh_repo_id,c.license,c.rule_version,t.title
+		FROM linuxdo_candidates c JOIN linuxdo_topics t ON t.id=c.topic_id
+		WHERE c.content_hash=t.content_hash AND c.topic_id IN (
+			SELECT old.topic_id FROM linuxdo_candidates old JOIN linuxdo_topics ot ON ot.id=old.topic_id
+			WHERE old.rule_version<? AND old.content_hash=ot.content_hash GROUP BY old.topic_id ORDER BY old.topic_id LIMIT 100
+		) ORDER BY c.topic_id,c.id`, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []model.LinuxDoObservation{}
+	indices := map[int64]int{}
+	for rows.Next() {
+		var c model.LinuxDoCandidate
+		var title string
+		if err := rows.Scan(&c.ID, &c.TopicID, &c.FullName, &c.ContentHash, &c.Context, &c.ExplicitPromotion, &c.State, &c.Reason, &c.RepoID, &c.License, &c.RuleVersion, &title); err != nil {
+			return nil, err
+		}
+		index, exists := indices[c.TopicID]
+		if !exists {
+			index = len(result)
+			indices[c.TopicID] = index
+			result = append(result, model.LinuxDoObservation{Topic: model.LinuxDoTopic{ID: c.TopicID, Title: title}})
+		}
+		result[index].Candidates = append(result[index].Candidates, c)
+	}
+	return result, rows.Err()
 }
 
-// ReviewLinuxDo 原子更新审核状态、公共仓库事实与来源关系；只有发布/撤回才影响客户端。
+// ReclassifyLinuxDoCandidates 只重置旧判定，不更新 RSS last_seen 或提前改动公共快照。
+func (s *SQLiteStore) ReclassifyLinuxDoCandidates(ctx context.Context, candidates []model.LinuxDoCandidate) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, c := range candidates {
+		if _, err := tx.ExecContext(ctx, `UPDATE linuxdo_candidates SET explicit_promotion=?,reason=?,rule_version=?,state='pending'
+			WHERE id=? AND content_hash=? AND rule_version<? AND EXISTS(
+				SELECT 1 FROM linuxdo_topics t WHERE t.id=linuxdo_candidates.topic_id AND t.content_hash=linuxdo_candidates.content_hash
+			)`, boolInt(c.ExplicitPromotion), c.Reason, c.RuleVersion, c.ID, c.ContentHash, c.RuleVersion); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ApplyLinuxDoDecision 原子保存机器判定、仓库事实与来源关系；跳过项不进入人工队列。
 // 复用 Awesome 的事实 upsert（不改 ranking/目录归属），避免 Linux.do 元数据把原目录分数归零。
-func (s *SQLiteStore) ReviewLinuxDo(ctx context.Context, candidate model.LinuxDoCandidate, state, reason string, repo *model.Repository) error {
-	if state != "review" && state != "published" && state != "rejected" && state != "withdrawn" {
+func (s *SQLiteStore) ApplyLinuxDoDecision(ctx context.Context, candidate model.LinuxDoCandidate, state, reason string, repo *model.Repository) error {
+	if state != "published" && state != "skipped" {
 		return fmt.Errorf("invalid Linux.do decision")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -125,11 +172,12 @@ func (s *SQLiteStore) ReviewLinuxDo(ctx context.Context, candidate model.LinuxDo
 	defer tx.Rollback()
 	var currentHash, topicHash, currentState string
 	var oldID int64
-	err = tx.QueryRowContext(ctx, `SELECT c.content_hash,t.content_hash,c.state,c.gh_repo_id FROM linuxdo_candidates c JOIN linuxdo_topics t ON t.id=c.topic_id WHERE c.id=?`, candidate.ID).Scan(&currentHash, &topicHash, &currentState, &oldID)
+	var ruleVersion int
+	err = tx.QueryRowContext(ctx, `SELECT c.content_hash,t.content_hash,c.state,c.gh_repo_id,c.rule_version FROM linuxdo_candidates c JOIN linuxdo_topics t ON t.id=c.topic_id WHERE c.id=?`, candidate.ID).Scan(&currentHash, &topicHash, &currentState, &oldID, &ruleVersion)
 	if err != nil {
 		return err
 	}
-	if currentHash != candidate.ContentHash || topicHash != candidate.ContentHash || currentState != candidate.State {
+	if currentHash != candidate.ContentHash || topicHash != candidate.ContentHash || currentState != candidate.State || ruleVersion != candidate.RuleVersion {
 		return ErrLinuxDoConflict
 	}
 	repoID, license := oldID, candidate.License
@@ -148,15 +196,22 @@ func (s *SQLiteStore) ReviewLinuxDo(ctx context.Context, candidate model.LinuxDo
 			return err
 		}
 	}
-	if state == "rejected" || state == "withdrawn" || (state == "published" && oldID > 0 && oldID != repoID) {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM linuxdo_repo_topics WHERE gh_repo_id=? AND topic_id=?`, oldID, candidate.TopicID); err != nil {
+	publicChanged := state == "published"
+	if state == "skipped" || (oldID > 0 && oldID != repoID) {
+		deleted, err := tx.ExecContext(ctx, `DELETE FROM linuxdo_repo_topics WHERE gh_repo_id=? AND topic_id=?`, oldID, candidate.TopicID)
+		if err != nil {
 			return err
 		}
+		count, err := deleted.RowsAffected()
+		if err != nil {
+			return err
+		}
+		publicChanged = publicChanged || count > 0
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE linuxdo_candidates SET state=?,reason=?,gh_repo_id=?,license=? WHERE id=?`, state, reason, repoID, license, candidate.ID); err != nil {
 		return err
 	}
-	if state != "review" {
+	if publicChanged {
 		if err := bumpLinuxDoRevision(ctx, tx); err != nil {
 			return err
 		}
@@ -185,7 +240,7 @@ func (s *SQLiteStore) RevokePrivateLinuxDoRepository(ctx context.Context, repoID
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE linuxdo_candidates SET state='withdrawn',reason='verified private repository' WHERE gh_repo_id=?`, repoID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE linuxdo_candidates SET state='skipped',reason='verified private repository' WHERE gh_repo_id=?`, repoID); err != nil {
 		return err
 	}
 	if count > 0 {

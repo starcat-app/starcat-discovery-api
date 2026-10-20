@@ -1,11 +1,10 @@
-// Linux.do 服务编排低频采集、GitHub 核验、人工审核与发布缓存失效。
+// Linux.do 服务编排低频采集、主项目自动识别、GitHub 核验与发布缓存失效。
 package linuxdo
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 )
 
 var ErrDisabled = errors.New("Linux.do collection is disabled pending authorization")
-var ErrBusy = errors.New("Linux.do sync or review is already running")
+var ErrBusy = errors.New("Linux.do sync is already running")
 
 // 只有 GitHub 明确返回 private 才撤回；403/404/超时不能伪装成私有或删除。
 type privateRepositoryError struct{ id int64 }
@@ -28,7 +27,7 @@ type GitHubClient interface {
 }
 type CacheInvalidator interface{ Invalidate() }
 
-// Service 单并发执行采集/审核，避免重复核验和审核结果被后台任务覆盖。
+// Service 单并发执行采集、规则升级重判与核验，避免重复发布或覆盖另一轮的证据。
 type Service struct {
 	store     *store.SQLiteStore
 	github    GitHubClient
@@ -87,6 +86,16 @@ func (s *Service) Sync(ctx context.Context, mode string) (result model.SyncResul
 	if err = s.store.ObserveLinuxDo(ctx, observations, state); err != nil {
 		return result, err
 	}
+	stale, err := s.store.LinuxDoStaleObservations(ctx, model.LinuxDoRuleVersion)
+	if err != nil {
+		return result, err
+	}
+	for _, observation := range stale {
+		classifyCandidates(observation.Topic.Title, observation.Candidates)
+		if err = s.store.ReclassifyLinuxDoCandidates(ctx, observation.Candidates); err != nil {
+			return result, err
+		}
+	}
 	candidates, err := s.store.LinuxDoVerificationQueue(ctx)
 	if err != nil {
 		return result, err
@@ -97,6 +106,12 @@ func (s *Service) Sync(ctx context.Context, mode string) (result model.SyncResul
 			return result, err
 		}
 		result.ReposSeen++
+		if !candidate.ExplicitPromotion {
+			if err = s.store.ApplyLinuxDoDecision(ctx, candidate, "skipped", candidate.Reason, nil); err != nil {
+				return result, err
+			}
+			continue
+		}
 		repo, verifyErr := s.verify(ctx, candidate.FullName)
 		if verifyErr != nil {
 			var private *privateRepositoryError
@@ -104,8 +119,8 @@ func (s *Service) Sync(ctx context.Context, mode string) (result model.SyncResul
 				if err = s.store.RevokePrivateLinuxDoRepository(ctx, private.id); err != nil {
 					return result, err
 				}
-				if candidate.RepoID == 0 {
-					if err = s.store.ReviewLinuxDo(ctx, candidate, "review", "repository is private", nil); err != nil {
+				if candidate.RepoID != private.id {
+					if err = s.store.ApplyLinuxDoDecision(ctx, candidate, "skipped", "verified private repository", nil); err != nil {
 						return result, err
 					}
 				}
@@ -114,76 +129,16 @@ func (s *Service) Sync(ctx context.Context, mode string) (result model.SyncResul
 			incomplete = true
 			continue
 		}
-		state, reason := "review", "promotion role requires review"
-		if !knownOpenLicense(repo.LicenseSpdx) {
-			reason = "license requires review"
-		} else if candidate.ExplicitPromotion || candidate.State == "published" {
-			state = "published"
-			reason = "explicit promotion and verified public repository"
-		}
-		if err = s.store.ReviewLinuxDo(ctx, candidate, state, reason, &repo); err != nil {
+		// 来源只表达推广关系，不替项目作许可证背书；未知许可证如实保留，不引入人工门禁。
+		if err = s.store.ApplyLinuxDoDecision(ctx, candidate, "published", "automatically identified project and verified public repository", &repo); err != nil {
 			return result, err
 		}
-		if state == "published" {
-			result.ReposUpserted++
-		}
+		result.ReposUpserted++
 	}
 	if incomplete {
 		return result, fmt.Errorf("GitHub verification incomplete; candidates remain queued")
 	}
 	return result, nil
-}
-
-// ReviewRequest 的 hash 与明确许可确认使审核决定可追溯，不能用裸 repo ID 越过核验。
-type ReviewRequest struct {
-	ContentHash     string `json:"content_hash"`
-	Decision        string `json:"decision"`
-	LicenseReviewed bool   `json:"license_reviewed"`
-	Reason          string `json:"reason"`
-}
-
-func (s *Service) Review(ctx context.Context, id int64, request ReviewRequest) error {
-	if !s.mu.TryLock() {
-		return ErrBusy
-	}
-	defer s.mu.Unlock()
-	candidate, err := s.store.LinuxDoCandidate(ctx, id)
-	if err != nil {
-		return err
-	}
-	if request.ContentHash != candidate.ContentHash {
-		return store.ErrLinuxDoConflict
-	}
-	var repo *model.Repository
-	state := request.Decision
-	switch state {
-	case "publish":
-		verified, err := s.verify(ctx, candidate.FullName)
-		if err != nil {
-			return err
-		}
-		if !knownOpenLicense(verified.LicenseSpdx) && (!request.LicenseReviewed || strings.TrimSpace(request.Reason) == "") {
-			return fmt.Errorf("explicit license review and reason required")
-		}
-		repo = &verified
-		state = "published"
-	case "reject":
-		state = "rejected"
-	case "withdraw":
-		state = "withdrawn"
-	default:
-		return fmt.Errorf("invalid review decision")
-	}
-	if len(request.Reason) > 1000 {
-		return fmt.Errorf("review reason too long")
-	}
-	if err = s.store.ReviewLinuxDo(ctx, candidate, state, request.Reason, repo); err != nil {
-		return err
-	}
-	if s.cache != nil {
-		s.cache.Invalidate()
-	}
-	return nil
 }
 
 func (s *Service) Candidates(ctx context.Context, after int64) ([]model.LinuxDoCandidate, error) {
@@ -218,13 +173,4 @@ func (s *Service) verify(ctx context.Context, fullName string) (model.Repository
 		return &t
 	}
 	return model.Repository{GhRepoID: r.ID, Owner: r.Owner.Login, Name: r.Name, FullName: r.FullName, Description: r.Description, Homepage: r.Homepage, Language: r.Language, Stars: r.Stargazers, Forks: r.Forks, Watchers: r.Watchers, Subscribers: r.Subscribers, OpenIssues: r.OpenIssues, OwnerAvatar: r.Owner.AvatarURL, DefaultBranch: r.DefaultBranch, LicenseSpdx: license, Topics: r.Topics, PushedAt: parse(r.PushedAt), UpdatedAt: parse(r.UpdatedAt), CreatedAt: parse(r.CreatedAt), IsArchived: r.Archived, IsFork: r.Fork, IndexedAt: now, EnrichedAt: &now}, nil
-}
-
-// 保守白名单只决定自动发布；未知或自定义许可证保留给有权限的人工审核。
-func knownOpenLicense(spdx string) bool {
-	switch spdx {
-	case "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "GPL-2.0", "GPL-3.0", "GPL-2.0-only", "GPL-3.0-only", "GPL-2.0-or-later", "GPL-3.0-or-later", "AGPL-3.0", "AGPL-3.0-only", "AGPL-3.0-or-later", "LGPL-2.1", "LGPL-3.0", "MPL-2.0", "ISC", "Unlicense":
-		return true
-	}
-	return false
 }

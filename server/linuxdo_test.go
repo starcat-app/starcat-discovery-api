@@ -28,7 +28,8 @@ func TestLinuxDoRoutesAndDisabledCollection(t *testing.T) {
 		{"GET", "/internal/discovery/linuxdo/candidates", "reader", 401},
 		{"GET", "/internal/discovery/linuxdo/candidates", "admin", 200},
 		{"POST", "/internal/sync/linuxdo", "admin", 503},
-		{"POST", "/internal/discovery/linuxdo/candidates/1/review", "reader", 401},
+		{"POST", "/internal/discovery/linuxdo/candidates/1/review", "reader", 404},
+		{"POST", "/internal/discovery/linuxdo/candidates/1/review", "admin", 404},
 	} {
 		r := httptest.NewRequest(test.method, test.path, nil)
 		r.Header.Set("Authorization", "Bearer "+test.token)

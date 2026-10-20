@@ -1,4 +1,4 @@
-// 发布、重试、审核和撤回在临时 SQLite 中验证，不接触生产数据库。
+// 自动发布、跳过、重试和撤回在临时 SQLite 中验证，不接触生产数据库。
 package linuxdo
 
 import (
@@ -29,7 +29,11 @@ func (f *fakeGitHub) GetRepository(context.Context, string) (gh.Repository, erro
 	if f.fail {
 		return gh.Repository{}, errors.New("unavailable")
 	}
-	return gh.Repository{ID: 123, Name: "app", FullName: "owner/app", Owner: gh.Owner{Login: "owner"}, Private: f.private, License: &gh.License{SPDXID: f.license}}, nil
+	var license *gh.License
+	if f.license != "" {
+		license = &gh.License{SPDXID: f.license}
+	}
+	return gh.Repository{ID: 123, Name: "app", FullName: "owner/app", Owner: gh.Owner{Login: "owner"}, Private: f.private, License: license}, nil
 }
 
 func TestSyncPersistsQueueAnd304RetriesWithoutLosingPublication(t *testing.T) {
@@ -79,26 +83,14 @@ func TestSyncPersistsQueueAnd304RetriesWithoutLosingPublication(t *testing.T) {
 		t.Fatal("ordinary sync pruned Linux.do")
 	}
 	queued, _ = service.Candidates(ctx, 0)
-	if err := service.Review(ctx, queued[0].ID, ReviewRequest{ContentHash: "stale", Decision: "withdraw"}); !errors.Is(err, store.ErrLinuxDoConflict) {
-		t.Fatal("accepted stale review")
-	}
-	if err := service.Review(ctx, queued[0].ID, ReviewRequest{ContentHash: queued[0].ContentHash, Decision: "withdraw"}); err != nil {
-		t.Fatal(err)
-	}
-	withdrawn, _ := service.Snapshot(ctx)
-	if len(withdrawn.Origins) != 0 || withdrawn.Revision <= snapshot.Revision || !withdrawn.Complete {
-		t.Fatal("invalid empty retraction snapshot")
-	}
-	if _, err := service.Sync(ctx, "test"); err != nil {
-		t.Fatal(err)
-	}
-	withdrawn, _ = service.Snapshot(ctx)
-	if len(withdrawn.Origins) != 0 {
-		t.Fatal("sync reversed withdrawal")
+	stale := queued[0]
+	stale.ContentHash = "stale"
+	if err := db.ApplyLinuxDoDecision(ctx, stale, "skipped", "outdated classification", nil); !errors.Is(err, store.ErrLinuxDoConflict) {
+		t.Fatal("accepted stale automatic decision")
 	}
 }
 
-func TestDefaultDisabledAndUnknownLicenseReview(t *testing.T) {
+func TestDefaultDisabledDoesNotMakeRequests(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.NewSQLiteStore(ctx, ":memory:")
 	if err != nil {
@@ -110,8 +102,106 @@ func TestDefaultDisabledAndUnknownLicenseReview(t *testing.T) {
 	if _, err := service.Sync(ctx, "manual"); !errors.Is(err, ErrDisabled) || github.calls != 0 {
 		t.Fatal("disabled collector made request")
 	}
-	if knownOpenLicense("NOASSERTION") || knownOpenLicense("BUSL-1.1") || knownOpenLicense("") {
-		t.Fatal("unknown license auto-approved")
+}
+
+// 未知许可证是元数据状态，不得把正常项目挂起等待无人处理的人工审批。
+func TestSyncAutomaticallyPublishesUnknownLicense(t *testing.T) {
+	for _, test := range []struct {
+		name, license string
+		private       bool
+	}{
+		{"unknown", "NOASSERTION", false},
+		{"missing", "", false},
+		{"custom", "BUSL-1.1", false},
+		{"private", "MIT", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "automatic.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/rss+xml")
+				fmt.Fprint(w, syntheticFeed(`<p>GitHub：<a href="https://github.com/owner/app">owner/app</a></p>`))
+			}))
+			defer upstream.Close()
+			service := NewService(db, &fakeGitHub{license: test.license, private: test.private}, true, nil)
+			service.collector.url = upstream.URL
+			if _, err := service.Sync(ctx, "test"); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := service.Snapshot(ctx)
+			count, state := 1, "published"
+			if test.private {
+				count, state = 0, "skipped"
+			}
+			if err != nil || len(snapshot.Repositories) != count {
+				t.Fatalf("unexpected publication: %+v %v", snapshot, err)
+			}
+			candidates, err := service.Candidates(ctx, 0)
+			if err != nil || len(candidates) != 1 || candidates[0].State != state || (!test.private && candidates[0].License != test.license) {
+				t.Fatalf("unexpected automatic decision: %+v %v", candidates, err)
+			}
+		})
+	}
+}
+
+// RSS 没变化或旧帖子已滑出窗口，都不应让升级前的候选继续等待人工处理。
+func TestSyncReclassifiesLegacyEvidenceAfter304(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "legacy-evidence.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	observation := model.LinuxDoObservation{
+		Topic: model.LinuxDoTopic{ID: 42, Title: "Old Tool", URL: "https://linux.do/t/topic/42", PublishedAt: "2026-10-14T00:00:00Z", ContentHash: "legacy"},
+		Candidates: []model.LinuxDoCandidate{
+			{TopicID: 42, FullName: "owner/app", ContentHash: "legacy", Context: "GitHub：owner/app"},
+			{TopicID: 42, FullName: "vendor/library", ContentHash: "legacy", Context: "依赖 vendor/library"},
+		},
+	}
+	if err := db.ObserveLinuxDo(ctx, []model.LinuxDoObservation{observation}, model.LinuxDoFeedState{ETag: `"feed"`, CheckedAt: time.Now().UTC(), RuleVersion: model.LinuxDoRuleVersion}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") != `"feed"` {
+			t.Error("expected current RSS conditional request")
+		}
+		w.WriteHeader(304)
+	}))
+	defer upstream.Close()
+	github := &fakeGitHub{license: "NOASSERTION"}
+	service := NewService(db, github, true, nil)
+	service.collector.url = upstream.URL
+	for i := 0; i < 2; i++ {
+		if _, err := service.Sync(ctx, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates, err := service.Candidates(ctx, 0)
+	if err != nil || len(candidates) != 2 || candidates[0].State != "published" || candidates[1].State != "skipped" || candidates[1].Reason == "" || github.calls != 1 {
+		t.Fatalf("legacy queue not automatically resolved: %+v calls=%d err=%v", candidates, github.calls, err)
+	}
+	for _, candidate := range candidates {
+		if candidate.RuleVersion != model.LinuxDoRuleVersion {
+			t.Fatalf("old classification left behind: %+v", candidate)
+		}
+	}
+	// 帖子内容变化时，之前的自动跳过决定必须能够自行恢复，不需要任何审批接口。
+	observation.Topic.ContentHash = "edited"
+	observation.Candidates = []model.LinuxDoCandidate{{TopicID: 42, FullName: "vendor/library", ContentHash: "edited", Context: "项目地址 vendor/library", ExplicitPromotion: true, RuleVersion: model.LinuxDoRuleVersion}}
+	if err := db.ObserveLinuxDo(ctx, []model.LinuxDoObservation{observation}, model.LinuxDoFeedState{ETag: `"feed"`, CheckedAt: time.Now().UTC(), RuleVersion: model.LinuxDoRuleVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Sync(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, _ = service.Candidates(ctx, 0)
+	if candidates[1].State != "published" || github.calls != 2 {
+		t.Fatalf("edited project did not retry: %+v calls=%d", candidates, github.calls)
 	}
 }
 
@@ -141,7 +231,11 @@ func TestVerifiedPrivateRepositoryRetractsAllTopicsButTransientFailureDoesNot(t 
 		t.Fatalf("candidate setup: %+v %v", candidates, err)
 	}
 	for _, candidate := range candidates {
-		if err := service.Review(ctx, candidate.ID, ReviewRequest{ContentHash: candidate.ContentHash, Decision: "publish"}); err != nil {
+		repo, err := service.verify(ctx, candidate.FullName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.ApplyLinuxDoDecision(ctx, candidate, "published", "automatic project identification", &repo); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -176,7 +270,7 @@ func TestVerifiedPrivateRepositoryRetractsAllTopicsButTransientFailureDoesNot(t 
 		t.Fatal(err)
 	}
 	for _, candidate := range candidates {
-		if candidate.State != "withdrawn" {
+		if candidate.State != "skipped" {
 			t.Fatalf("private candidate can republish: %+v", candidate)
 		}
 	}

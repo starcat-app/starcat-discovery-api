@@ -4,9 +4,7 @@ package handler
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -120,32 +118,6 @@ func (h *LinuxDoHandler) HandleCandidates(w http.ResponseWriter, r *http.Request
 		return
 	}
 	WriteJSON(w, items)
-}
-
-// HandleReview 严格限制请求大小/字段，避免误把旧证据或任意仓库元数据直接写入发布表。
-func (h *LinuxDoHandler) HandleReview(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("candidate_id"), 10, 64)
-	if err != nil || id <= 0 {
-		WriteError(w, 400, "INVALID_CANDIDATE", "Invalid candidate ID", nil)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var request linuxdo.ReviewRequest
-	if err = decoder.Decode(&request); err != nil {
-		WriteError(w, 400, "INVALID_REVIEW", "Invalid review body", nil)
-		return
-	}
-	if err = decoder.Decode(&struct{}{}); err != io.EOF {
-		WriteError(w, 400, "INVALID_REVIEW", "Expected one review object", nil)
-		return
-	}
-	if err = h.service.Review(r.Context(), id, request); err != nil {
-		writeLinuxDoError(w, err)
-		return
-	}
-	WriteJSON(w, map[string]bool{"updated": true})
 }
 
 func writeLinuxDoError(w http.ResponseWriter, err error) {

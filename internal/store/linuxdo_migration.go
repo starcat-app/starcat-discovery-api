@@ -44,5 +44,51 @@ func ensureLinuxDoSchema(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return ensureLinuxDoAutomationSchema(ctx, db)
+}
+
+// ensureLinuxDoAutomationSchema 追加迁移而不回写已部署的初始 DDL。
+// 重建 CHECK 约束，保留 ID、已发布关系、许可证和最小证据；旧审核状态统一回到自动核验。
+func ensureLinuxDoAutomationSchema(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	const migration = "2026-10-18-linuxdo-automatic-classification"
+	var applied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM store_migrations WHERE name=?`, migration).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `
+		ALTER TABLE linuxdo_state ADD COLUMN rule_version INTEGER NOT NULL DEFAULT 0;
+		CREATE TABLE linuxdo_candidates_automatic (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			topic_id INTEGER NOT NULL REFERENCES linuxdo_topics(id), full_name TEXT NOT NULL COLLATE NOCASE,
+			content_hash TEXT NOT NULL, context TEXT NOT NULL, explicit_promotion INTEGER NOT NULL,
+			state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','published','skipped')),
+			reason TEXT NOT NULL DEFAULT '', gh_repo_id INTEGER NOT NULL DEFAULT 0, license TEXT NOT NULL DEFAULT '',
+			rule_version INTEGER NOT NULL DEFAULT 0, UNIQUE(topic_id, full_name)
+		);
+		INSERT INTO linuxdo_candidates_automatic(id,topic_id,full_name,content_hash,context,explicit_promotion,state,reason,gh_repo_id,license)
+			SELECT id,topic_id,full_name,content_hash,context,explicit_promotion,
+				CASE WHEN state='published' THEN 'published' ELSE 'pending' END,reason,gh_repo_id,license
+			FROM linuxdo_candidates;
+		DROP TABLE linuxdo_candidates;
+		ALTER TABLE linuxdo_candidates_automatic RENAME TO linuxdo_candidates;
+		CREATE INDEX idx_linuxdo_candidates_queue ON linuxdo_candidates(state,id);
+	`)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO store_migrations(name,applied_at) VALUES(?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))`, migration); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
