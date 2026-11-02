@@ -9,7 +9,7 @@ Starcat 探索发现后端：Discovery feed、热门/新发布榜单、Awesome �
 
 ## 技术栈
 
-- Go 1.25.0 · `net/http`
+- Go 1.26.10 · `net/http`
 - `modernc.org/sqlite` · `github.com/robfig/cron/v3`
 - `golang.org/x/oauth2`（Star History / GCP）
 - `github.com/yuin/goldmark`（Awesome 解析）

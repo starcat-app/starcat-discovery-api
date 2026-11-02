@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- 将 Go 工具链、CI 和 Docker 构建统一至 1.26.10，并在 CI 中加入固定版本的 govulncheck 检查。
+- 将 `golang.org/x/sys` 升级至 v0.44.0，包含 Windows 字符串长度溢出的修复。
+
 ## 2.1.0 - 2026-08-27
 
 ### Added
