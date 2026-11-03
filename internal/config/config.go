@@ -30,6 +30,7 @@ const (
 )
 
 // Config 是服务启动所需的完整配置。
+// LinuxDoEnabled 默认关闭：RSS 可读不等于已取得自动采集许可。
 type Config struct {
 	Port                    string
 	StoreFile               string
@@ -38,6 +39,7 @@ type Config struct {
 	AdminAPIKeys            []string
 	GitHubTokens            []string
 	SyncEnabled             bool
+	LinuxDoEnabled          bool
 	SyncCron                string
 	FullSyncCron            string
 	CacheTTLSeconds         int
@@ -67,6 +69,7 @@ func Load() (Config, error) {
 		AdminAPIKeys:            kitenv.LookupCSV("ADMIN_API_KEYS"),
 		GitHubTokens:            kitenv.LookupCSV("GITHUB_TOKENS"),
 		SyncEnabled:             kitenv.Bool("SYNC_ENABLED", defaultSyncEnabled),
+		LinuxDoEnabled:          kitenv.Bool("LINUXDO_COLLECTION_ENABLED", false),
 		SyncCron:                kitenv.OrDefault("SYNC_CRON", defaultSyncCron),
 		FullSyncCron:            kitenv.OrDefault("FULL_SYNC_CRON", defaultFullSyncCron),
 		CacheTTLSeconds:         kitenv.Int("CACHE_TTL_SECONDS", defaultCacheTTLSeconds),
