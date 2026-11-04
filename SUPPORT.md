@@ -9,4 +9,4 @@ Before opening an issue:
 - Remove API keys, tokens, license keys, private notes, customer data, and other secrets from logs or screenshots.
 - Keep one problem or request per issue.
 
-For Starcat application and product support, use [starcat-pro Issues](https://github.com/starcat-app/starcat-pro/issues). Report vulnerabilities privately through this repository's Security tab as described in [SECURITY.md](./SECURITY.md).
+For Starcat application and product support, use [starcat-pro Issues](https://github.com/starcat-app/Starcat/issues). Report vulnerabilities privately through this repository's Security tab as described in [SECURITY.md](./SECURITY.md).
