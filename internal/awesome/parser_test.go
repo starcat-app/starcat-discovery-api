@@ -144,3 +144,61 @@ func TestNormalizeTargetMapsOtherRepositoryDeepLinksToRepositoryRoot(t *testing.
 		t.Fatalf("unexpected target: %#v", target)
 	}
 }
+
+func TestParseREADMERecognizesSourceIconsAcrossSourcesAndContainers(t *testing.T) {
+	// 保留 awesome-mac 的真实链接结构，但同时用其他来源和容器验证通用规则，
+	// 防止把修复绑定到某个仓库名，或把图标 alt 当成项目名称。
+	entry := `[Starcat](https://starcat.ink/) - Native, local-first GitHub Stars manager. [![Open-Source Software][OSS Icon]](https://github.com/starcat-app/Starcat) ![Freeware][Freeware Icon] [![App Store][app-store Icon]](https://apps.apple.com/app/id6788809803)`
+	for _, sourceRepo := range []string{"jaywcjlove/awesome-mac", "acme/awesome-tools"} {
+		for _, container := range []struct {
+			name string
+			body string
+		}{
+			{name: "list", body: "* " + entry},
+			{name: "blockquote", body: "> " + entry},
+			{name: "table", body: "| Project |\n| --- |\n| " + entry + " |"},
+		} {
+			t.Run(sourceRepo+"/"+container.name, func(t *testing.T) {
+				markdown := []byte("## Developer Tools\n\n" + container.body + "\n\n[OSS Icon]: https://example.com/oss.svg\n[Freeware Icon]: https://example.com/free.svg\n[app-store Icon]: https://example.com/store.svg\n")
+				result, err := ParseREADME(markdown, sourceRepo, "https://github.com/"+sourceRepo+"/blob/main/README.md", "sha-icons")
+				if err != nil {
+					t.Fatal(err)
+				}
+				entries, _ := entriesForProfile("generic", result.Entries, result.IgnoredCount)
+				if len(entries) != 1 {
+					t.Fatalf("repository entries = %+v, want Starcat", entries)
+				}
+				got := entries[0]
+				if got.TargetKey != "github_name:starcat-app/starcat" || got.EntryTitle != "Starcat" ||
+					got.EntryDescription != "Native, local-first GitHub Stars manager." ||
+					got.RawURL != "https://github.com/starcat-app/Starcat" ||
+					got.SourceAnchorURL != "https://github.com/"+sourceRepo+"/blob/main/README.md#developer-tools" ||
+					got.LastSeenSHA != "sha-icons" {
+					t.Fatalf("source icon lost project metadata: %+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestParseREADMEFiltersBadgesAndDeduplicatesSourceIcons(t *testing.T) {
+	markdown := []byte(`## Tools
+
+- [Alpha](https://github.com/example/alpha) - Useful tool. [![Source Code](https://example.com/source.svg)](https://github.com/example/alpha)
+- [Beta](https://beta.example) - Another tool. [![Source Code](https://example.com/source.svg)](https://github.com/example/beta)
+- [Badges](https://example.com) - Not source links. [![build](https://example.com/build.svg)](https://github.com/example/build) [![App Store](https://example.com/store.svg)](https://github.com/example/store) [![Sponsor](https://example.com/sponsor.svg)](https://github.com/example/sponsor)
+- [External](https://external.example) - No repository. [![Source Code](https://example.com/source.svg)](https://other.example/source)
+- [![Source Code](https://example.com/source.svg)](https://github.com/example/orphan)
+`)
+	result, err := ParseREADME(markdown, "acme/awesome", "", "sha-icons")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := entriesForProfile("generic", result.Entries, result.IgnoredCount)
+	if len(entries) != 2 || entries[0].EntryTitle != "Alpha" || entries[1].EntryTitle != "Beta" {
+		t.Fatalf("unexpected badge entries: %+v", entries)
+	}
+	if entries[1].EntryDescription != "Another tool." || result.DuplicateCount != 1 {
+		t.Fatalf("description or duplicate diagnostics = %+v", result)
+	}
+}

@@ -234,6 +234,63 @@ func TestServicePublishRequiresSuccessfulNonEmptySync(t *testing.T) {
 	}
 }
 
+func TestServiceManualSyncReparsesUnchangedREADMEWhileSchedulerSkips(t *testing.T) {
+	ctx := context.Background()
+	sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "awesome.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqliteStore.Close()
+	fake := &fakeGitHubClient{
+		repos: map[string]gh.Repository{
+			"acme/awesome": sourceRepository(),
+			"example/alpha": {
+				ID: 2, FullName: "example/alpha", Name: "alpha", DefaultBranch: "main",
+				Owner: gh.Owner{Login: "example"}, Stargazers: 1,
+			},
+		},
+		readme: gh.README{
+			Path: "README.md", SHA: "same-sha",
+			Content: []byte("- [Alpha](https://github.com/example/alpha) - Useful tool.\n"),
+		},
+	}
+	service := NewService(sqliteStore, fake)
+	source, err := service.CreateSource(ctx, model.AwesomeSource{
+		ID: "manual-reparse", RepoFullName: "acme/awesome", DisplayName: "Manual reparse",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SyncSource(ctx, source.ID, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PublishSource(ctx, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	// README 保持原样，只改变 GitHub 事实。Stars 是否重建可以区分真正重解析
+	// 和只更新来源元数据的 SHA 快路径，不依赖伪造“内容变了但 SHA 没变”。
+	repository := fake.repos["example/alpha"]
+	repository.Stargazers = 99
+	fake.repos["example/alpha"] = repository
+	for _, trigger := range []string{"scheduler", "manual"} {
+		run, err := service.SyncSource(ctx, source.ID, trigger)
+		if err != nil || run.Status != "succeeded" {
+			t.Fatalf("%s sync = %+v, %v", trigger, run, err)
+		}
+		snapshot, err := service.PublishedEntries(ctx, source.ID)
+		if err != nil || len(snapshot.Entries) != 1 {
+			t.Fatalf("snapshot = %+v, %v", snapshot, err)
+		}
+		wantStars := 1
+		if trigger == "manual" {
+			wantStars = 99
+		}
+		if snapshot.Entries[0].Stars != wantStars {
+			t.Fatalf("%s sync stars = %d, want %d", trigger, snapshot.Entries[0].Stars, wantStars)
+		}
+	}
+}
+
 func TestServiceClearsCatalogWithoutIndependentGitHubRepositories(t *testing.T) {
 	ctx := context.Background()
 	sqliteStore, err := store.NewSQLiteStore(ctx, filepath.Join(t.TempDir(), "awesome.db"))

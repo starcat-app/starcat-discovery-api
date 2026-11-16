@@ -265,7 +265,9 @@ func (s *Service) buildSnapshot(ctx context.Context, source model.AwesomeSource,
 	// 进入快照，因此即使 README SHA 未变化，只要旧计数仍存在也必须强制重建一次，
 	// 否则 SHA 快路径会让已经废弃的条目永久残留在生产数据中。
 	githubOnlySnapshot := source.ExternalEntryCount == 0 && source.ResourceEntryCount == 0
-	if readme.SHA != "" && readme.SHA == source.LastSuccessfulSHA && factsComplete && githubOnlySnapshot {
+	// 手动同步是部署解析规则后主动修复快照的入口，必须重新解析未变化的 README；
+	// 定时同步仍保留 SHA 快路径，避免每三小时重复核验全部仓库、消耗 GitHub 配额。
+	if run.Trigger == "scheduler" && readme.SHA != "" && readme.SHA == source.LastSuccessfulSHA && factsComplete && githubOnlySnapshot {
 		run.Status = "succeeded"
 		run.ReadmeSHA = readme.SHA
 		run.GitHubCount = source.GitHubRepoCount

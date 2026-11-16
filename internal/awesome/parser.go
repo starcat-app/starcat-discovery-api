@@ -72,9 +72,13 @@ func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseR
 		links := directContainerLinks(node)
 		for _, link := range links {
 			result.ExtractedCount++
+			primary := link
 			if hasImageDescendant(link) {
-				result.IgnoredCount++
-				continue
+				primary = sourceIconPrimary(link, links, source)
+				if primary == nil {
+					result.IgnoredCount++
+					continue
+				}
 			}
 			rawURL := strings.TrimSpace(string(link.Destination))
 			if shouldIgnoreLink(rawURL) {
@@ -84,6 +88,10 @@ func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseR
 			target, normalizeErr := NormalizeTargetForSource(rawURL, sourceRepo)
 			if normalizeErr != nil {
 				result.InvalidCount++
+				continue
+			}
+			if primary != link && target.Type != "github_repo" {
+				result.IgnoredCount++
 				continue
 			}
 			if target.Type == "github_repo" && strings.EqualFold(target.RepoFullName, sourceRepo) {
@@ -100,7 +108,7 @@ func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseR
 				return ast.WalkStop, fmt.Errorf("README exceeds %d entries", maxEntries)
 			}
 
-			title := cleanText(string(link.Text(source)))
+			title := cleanText(string(primary.Text(source)))
 			if title == "" && target.RepoFullName != "" {
 				parts := strings.Split(target.RepoFullName, "/")
 				title = parts[len(parts)-1]
@@ -109,7 +117,7 @@ func ParseREADME(source []byte, sourceRepo, readmeURL, readmeSHA string) (ParseR
 				TargetType:       target.Type,
 				TargetKey:        target.Key,
 				EntryTitle:       title,
-				EntryDescription: containerDescription(node, link, source),
+				EntryDescription: containerDescription(node, primary, source),
 				SectionPath:      append([]string(nil), section...),
 				RawURL:           target.URL,
 				SourceAnchorURL:  sourceAnchorURL(readmeURL, section),
@@ -183,6 +191,36 @@ func hasImageDescendant(node ast.Node) bool {
 		return ast.WalkContinue, nil
 	})
 	return found
+}
+
+// sourceIconPrimary 只将明确标为源码的图片链接视为项目仓库入口。
+// 名称和介绍必须继承同一 AST 条目内先出现的项目链接；不跨嵌套条目寻找，
+// 也不把构建、商店、赞助徽章升级为仓库，避免通用规则引入无关项目。
+func sourceIconPrimary(link *ast.Link, links []*ast.Link, source []byte) *ast.Link {
+	isSourceIcon := false
+	_ = ast.Walk(link, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if image, ok := node.(*ast.Image); entering && ok {
+			switch strings.ToLower(cleanText(string(image.Text(source)))) {
+			case "open-source software", "source code":
+				isSourceIcon = true
+			}
+			return ast.WalkSkipChildren, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	if !isSourceIcon {
+		return nil
+	}
+	for _, candidate := range links {
+		if candidate == link {
+			break
+		}
+		if !hasImageDescendant(candidate) && !shouldIgnoreLink(string(candidate.Destination)) &&
+			cleanText(string(candidate.Text(source))) != "" {
+			return candidate
+		}
+	}
+	return nil
 }
 
 func listItemDescription(item *ast.ListItem, primary *ast.Link, source []byte) string {
