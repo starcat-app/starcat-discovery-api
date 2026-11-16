@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Security
+- 将 `golang.org/x/net` 升级至 v0.62.0，修复 HTML 解析中的 GO-2026-6860 可达漏洞。
+- 将构建工具链和 Docker 镜像升级至 Go 1.26.11，包含最新 Go 1.26 安全修复。
 - 将 Go 工具链、CI 和 Docker 构建统一至 1.26.10，并在 CI 中加入固定版本的 govulncheck 检查。
 - 将 `golang.org/x/sys` 升级至 v0.44.0，包含 Windows 字符串长度溢出的修复。
 
