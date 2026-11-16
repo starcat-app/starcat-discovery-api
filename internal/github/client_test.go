@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +34,61 @@ func TestClientGetREADMEDecodesGitHubContent(t *testing.T) {
 	}
 	if string(readme.Content) != "# Awesome" || readme.SHA != "sha-1" || readme.Path != "README.md" {
 		t.Fatalf("README = %+v", readme)
+	}
+}
+
+func TestClientGetREADMEReadsLargeContentsThroughImmutableBlob(t *testing.T) {
+	// Contents API 对大于 1 MiB 的 README 返回 encoding=none；按其 SHA 读取
+	// Git blob，才能在默认分支继续更新时仍保留同一份 README 的证据。
+	content := strings.Repeat("x", 1024*1024+1)
+	const readmeSHA = "90186230ab6381d426c2d812e856a4ee9d2c44a8"
+	tokens := tokenpool.New([]string{"github_pat_token_one_123456"})
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/repos/acme/awesome/readme":
+			_ = json.NewEncoder(w).Encode(readmeResponse{
+				Path: "README.md", SHA: readmeSHA, HTMLURL: "https://github.com/acme/awesome/blob/main/README.md",
+				Encoding: "none", Size: len(content),
+			})
+		case "/repos/acme/awesome/git/blobs/" + readmeSHA:
+			_ = json.NewEncoder(w).Encode(readmeResponse{
+				SHA: readmeSHA, Encoding: "base64", Content: base64.StdEncoding.EncodeToString([]byte(content)),
+			})
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(tokens, 50).WithBaseURL(server.URL)
+	client.httpClient = server.Client()
+	readme, err := client.GetREADME(t.Context(), "acme/awesome")
+	if err != nil || string(readme.Content) != content || readme.SHA != readmeSHA ||
+		readme.Path != "README.md" || readme.HTMLURL != "https://github.com/acme/awesome/blob/main/README.md" {
+		t.Fatalf("large README metadata/content mismatch: path=%q sha=%q bytes=%d error=%v", readme.Path, readme.SHA, len(readme.Content), err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("request paths = %v, want metadata and one immutable blob", paths)
+	}
+}
+
+func TestClientGetREADMERejectsOversizedBlobBeforeDownloading(t *testing.T) {
+	tokens := tokenpool.New([]string{"github_pat_token_one_123456"})
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_ = json.NewEncoder(w).Encode(readmeResponse{SHA: "large-sha", Encoding: "none", Size: 2*1024*1024 + 1})
+	}))
+	defer server.Close()
+	client := NewClient(tokens, 50).WithBaseURL(server.URL)
+	client.httpClient = server.Client()
+	if _, err := client.GetREADME(t.Context(), "acme/awesome"); err == nil {
+		t.Fatal("expected oversized README to be rejected")
+	}
+	if requests != 1 {
+		t.Fatalf("oversized README triggered %d requests, want metadata only", requests)
 	}
 }
 

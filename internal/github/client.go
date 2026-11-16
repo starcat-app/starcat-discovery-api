@@ -157,7 +157,7 @@ func (c *Client) GetRepositoryLanguages(ctx context.Context, fullName string) (m
 
 // GetREADME 读取来源仓库默认分支 README 的内容与稳定 SHA。
 //
-// 这里只调用 GitHub Contents API，不跟随 README 中的任意 URL，避免把内容同步变成 SSRF 入口。
+// 只调用 GitHub Contents / Git Blobs API，不跟随 README 中的任意 URL，保持来源读取边界。
 func (c *Client) GetREADME(ctx context.Context, fullName string) (README, error) {
 	parts := strings.SplitN(fullName, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -167,6 +167,19 @@ func (c *Client) GetREADME(ctx context.Context, fullName string) (README, error)
 	path := "/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/readme"
 	if err := c.get(ctx, path, &response); err != nil {
 		return README{}, err
+	}
+	// GitHub Contents API 对大于 1 MiB 的文件省略正文。只按 API 返回的不可变
+	// SHA 读取同仓 Git blob，不跟随 download_url，并沿用解析器的 2 MiB 上限。
+	if response.Encoding == "none" && response.Content == "" && response.SHA != "" {
+		if response.Size > 2*1024*1024 {
+			return README{}, fmt.Errorf("github README exceeds 2 MiB")
+		}
+		var blob readmeResponse
+		blobPath := "/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/git/blobs/" + url.PathEscape(response.SHA)
+		if err := c.get(ctx, blobPath, &blob); err != nil {
+			return README{}, err
+		}
+		response.Encoding, response.Content = blob.Encoding, blob.Content
 	}
 	if response.Encoding != "base64" || response.Content == "" {
 		return README{}, fmt.Errorf("github README encoding %q is unsupported", response.Encoding)
@@ -402,6 +415,7 @@ type readmeResponse struct {
 	HTMLURL  string `json:"html_url"`
 	Encoding string `json:"encoding"`
 	Content  string `json:"content"`
+	Size     int    `json:"size"`
 }
 
 // README 是 Awesome 同步所需的 GitHub README 快照。

@@ -251,6 +251,7 @@ GET    /internal/discovery/awesome/sources/{source_id}/sync-runs
 - 常规 light sync cron 会刷新全部 published 来源；管理端也可手动触发。
 - 定时同步在 README SHA 未变且现有仓库事实完整时跳过重解析；管理端 `POST .../{source_id}/sync` 始终重解析并核验仓库，因此部署解析规则后无需等待 README 更新即可修复快照。客户端的刷新只重新读取已发布快照，不触发 GitHub 抓取。
 - 通用 AST 解析支持条目内以 `Open-Source Software` / `Source Code` 图片链接指向的 GitHub 仓库，继承同条目的项目名称与介绍；构建、商店及赞助徽章仍忽略，不按具体 Awesome 仓库名分派规则。
+- GitHub Contents API 对大于 1 MiB 的 README 省略正文时，使用返回的 SHA 读取同仓 Git blob，保留原始路径与证据 SHA；README 仍限制为 2 MiB，不跟随任意下载 URL。
 - CLI / MCP：沿用已有 Admin HTTP 同步入口；生产管理权限不下放至客户端 CLI / MCP，本次不新增公共动作。
 
 Awesome 稳定错误码：`AWESOME_SOURCE_INVALID`、`AWESOME_SOURCE_NOT_FOUND`、`AWESOME_SOURCE_CONFLICT`、`AWESOME_SOURCE_NOT_READY`、`AWESOME_README_UNSUPPORTED`、`GITHUB_RATE_LIMITED`、`AWESOME_SYNC_UNAVAILABLE`。
